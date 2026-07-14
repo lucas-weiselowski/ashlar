@@ -5,6 +5,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Version
 ## [Unreleased]
 ### Changed
 - README: reconciled "three tools" vs "four subcommands" phrasing, renamed "Keeping the Ledger" section to "Using the CLI" since it documents all four subcommands, not just `record`/`report`.
+- README: moved Installation above Using the CLI (usage examples referenced `ashlar` before saying how to get it), and dropped the "Status" section — it restated the intro/Working-Tools content near-verbatim with no new information.
 
 ## [0.2.0] - 2026-07-14
 ### Added

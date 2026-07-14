@@ -16,7 +16,7 @@
 
 **Ashlar is a context-compaction toolkit for AI coding agents.** When an agent calls a tool — reading a file, dumping a log, running a search — most of what comes back is noise: repeated reads of the same file, walls of stack trace, oversized search results. That noise still costs tokens even though the model never needed it. Ashlar's job is to cut it down to the part that actually matters before it reaches the model.
 
-All three tools exist now, as four CLI subcommands (see [Status](#status)): `record`/`report` to measure, `gavel` to dedup repeated reads, `chisel` to trim verbose output to its load-bearing lines. A [Claude Code skill](skill/ashlar/SKILL.md) wraps `gavel`/`chisel` with usage guidance so any agent harness knows when to reach for them.
+All three tools exist now, as four CLI subcommands: `record`/`report` to measure, `gavel` to dedup repeated reads, `chisel` to trim verbose output to its load-bearing lines. A [Claude Code skill](skill/ashlar/SKILL.md) wraps `gavel`/`chisel` with usage guidance so any agent harness knows when to reach for them — portable to any harness that can shell out to a CLI filter, nothing here is Claude-specific.
 
 The README frames this in a stonemason's metaphor, kept throughout: raw context is a rough stone from the quarry — irregular, heavy, unfit for the wall. Three tools work it into a finished ashlar (a squared building stone) fit for use: the 24-inch gauge to measure, the common gavel to knock off gross excess, the chisel to smooth what's left.
 
@@ -37,6 +37,33 @@ Three tools, three jobs — each maps to a real piece of the toolkit:
 **Chisel — smooth what the gavel leaves.** `chisel` collapses repeated lines, keeps error/warning/traceback lines plus context, and head/tail-truncates anything still oversized — verbose logs, stack traces, and grep dumps reduced to their load-bearing lines.
 
 What enters a rough ashlar leaves a perfect one: smaller, denser, doing the same work in the wall.
+
+## Installation
+
+**As a Claude Code plugin** (installs the [skill](skill/ashlar/SKILL.md) so an agent invokes `gavel`/`chisel` on its own):
+
+```
+curl -fsSL https://raw.githubusercontent.com/lucas-weiselowski/ashlar/main/install.sh | bash
+```
+
+or from a local clone:
+
+```
+git clone <this-repo> && cd ashlar
+./install.sh
+```
+
+This registers the repo as a marketplace (`claude plugin marketplace add`) and installs the `ashlar` plugin (`claude plugin install ashlar@ashlar`). Restart Claude Code to pick it up.
+
+**As a standalone CLI only** (no plugin/skill, just the `ashlar` command):
+
+```
+git clone <this-repo>
+chmod +x ashlar/bin/ashlar
+export PATH="$PATH:/path/to/ashlar/bin"
+```
+
+Requires Python 3, no other dependencies. Check it's on your PATH with `ashlar --version`.
 
 ## Using the CLI
 
@@ -70,37 +97,6 @@ $ some_noisy_command 2>&1 | ashlar chisel --max-lines 80
 # Either one can log its own savings straight to the ledger:
 $ ashlar chisel --file build.log --record --label "CI build log"
 ```
-
-## Status
-
-All four subcommands are real, working functionality: `record`/`report` to measure, `gavel` to dedup repeated reads, `chisel` to trim verbose output. The [`skill/ashlar`](skill/ashlar/SKILL.md) directory packages `gavel`/`chisel` as a Claude Code skill — usage guidance an agent can follow to invoke them before returning large tool output, portable to any harness that can shell out to a CLI filter.
-
-## Installation
-
-**As a Claude Code plugin** (installs the [skill](skill/ashlar/SKILL.md) so an agent invokes `gavel`/`chisel` on its own):
-
-```
-curl -fsSL https://raw.githubusercontent.com/lucas-weiselowski/ashlar/main/install.sh | bash
-```
-
-or from a local clone:
-
-```
-git clone <this-repo> && cd ashlar
-./install.sh
-```
-
-This registers the repo as a marketplace (`claude plugin marketplace add`) and installs the `ashlar` plugin (`claude plugin install ashlar@ashlar`). Restart Claude Code to pick it up.
-
-**As a standalone CLI only** (no plugin/skill, just the `ashlar` command):
-
-```
-git clone <this-repo>
-chmod +x ashlar/bin/ashlar
-export PATH="$PATH:/path/to/ashlar/bin"
-```
-
-Requires Python 3, no other dependencies. Check it's on your PATH with `ashlar --version`.
 
 ## License
 
