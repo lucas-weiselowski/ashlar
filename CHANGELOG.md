@@ -11,6 +11,11 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Version
 - README: reconciled "three tools" vs "four subcommands" phrasing, renamed "Keeping the Ledger" section to "Using the CLI" since it documents all four subcommands, not just `record`/`report`.
 - README: moved Installation above Using the CLI (usage examples referenced `ashlar` before saying how to get it), and dropped the "Status" section — it restated the intro/Working-Tools content near-verbatim with no new information.
 
+### Fixed
+- `chisel`: `LOAD_BEARING_RE` now also matches CamelCase exception names (`ValueError`, `KeyError`, ...) — previously `\berror\b` required a word boundary that CamelCase names don't have, so the actual exception message in a traceback could get chiseled away while only the literal "Traceback" line survived. The added alternative is scoped case-sensitive so it only catches CamelCase, not lowercase substrings like "terror" (#5).
+- `gavel`: falls back to sending the full new content instead of a unified diff when the diff isn't actually smaller — near-total rewrites could previously produce a diff bigger than just the new text, defeating the point of the tool for that call (#10).
+- `report --by-label`: labels longer than 31 chars now get a visible `...` ellipsis instead of being silently cut off with no indication of truncation (#9).
+
 ## [0.2.0] - 2026-07-14
 ### Added
 - `gavel` subcommand — dedup repeated tool output; caches last-seen content per `--key` under `~/.ashlar/gavel/`, returns an unchanged-marker or unified diff on repeat reads instead of the full body.
