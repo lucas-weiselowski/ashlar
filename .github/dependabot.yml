@@ -4,7 +4,15 @@ updates:
     directory: "/"
     schedule:
       interval: "monthly"
+    groups:
+      codeql-action:
+        patterns:
+          - "github/codeql-action/*"
   - package-ecosystem: "pip"
     directory: "/"
     schedule:
       interval: "monthly"
+    ignore:
+      # pytest 9.x drops Python 3.9, which is still in the CI test matrix.
+      - dependency-name: "pytest"
+        update-types: ["version-update:semver-major"]
