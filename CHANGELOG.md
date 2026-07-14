@@ -3,6 +3,8 @@
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versioning follows [SemVer](https://semver.org/).
 
 ## [Unreleased]
+### Changed
+- README: reconciled "three tools" vs "four subcommands" phrasing, renamed "Keeping the Ledger" section to "Using the CLI" since it documents all four subcommands, not just `record`/`report`.
 
 ## [0.2.0] - 2026-07-14
 ### Added

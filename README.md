@@ -16,7 +16,7 @@
 
 **Ashlar is a context-compaction toolkit for AI coding agents.** When an agent calls a tool — reading a file, dumping a log, running a search — most of what comes back is noise: repeated reads of the same file, walls of stack trace, oversized search results. That noise still costs tokens even though the model never needed it. Ashlar's job is to cut it down to the part that actually matters before it reaches the model.
 
-All three working tools exist now (see [Status](#status)): `record`/`report` to measure, `gavel` to dedup repeated reads, `chisel` to trim verbose output to its load-bearing lines. A [Claude Code skill](skill/ashlar/SKILL.md) wraps `gavel`/`chisel` with usage guidance so any agent harness knows when to reach for them.
+All three tools exist now, as four CLI subcommands (see [Status](#status)): `record`/`report` to measure, `gavel` to dedup repeated reads, `chisel` to trim verbose output to its load-bearing lines. A [Claude Code skill](skill/ashlar/SKILL.md) wraps `gavel`/`chisel` with usage guidance so any agent harness knows when to reach for them.
 
 The README frames this in a stonemason's metaphor, kept throughout: raw context is a rough stone from the quarry — irregular, heavy, unfit for the wall. Three tools work it into a finished ashlar (a squared building stone) fit for use: the 24-inch gauge to measure, the common gavel to knock off gross excess, the chisel to smooth what's left.
 
@@ -38,9 +38,9 @@ Three tools, three jobs — each maps to a real piece of the toolkit:
 
 What enters a rough ashlar leaves a perfect one: smaller, denser, doing the same work in the wall.
 
-## Keeping the Ledger
+## Using the CLI
 
-`bin/ashlar` is a single-file Python (stdlib only) CLI with four subcommands: `record`, `report`, `gavel`, `chisel`. It writes to a JSONL ledger at `~/.ashlar/ledger.jsonl` (one line per recorded compaction) so savings aren't lost between sessions.
+`bin/ashlar` is a single-file Python (stdlib only) CLI with four subcommands: `record`, `report`, `gavel`, `chisel`. `gavel`/`chisel` read from a file or stdin and write the compacted result to stdout — they're filters, meant to sit in a pipeline before output reaches the model. `record`/`report` write to and read from a JSONL ledger at `~/.ashlar/ledger.jsonl` (one line per recorded compaction) so savings aren't lost between sessions; `gavel`/`chisel` can log to that same ledger with `--record`.
 
 ```
 # Type in counts you already know:
