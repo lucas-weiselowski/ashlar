@@ -24,7 +24,8 @@ DURATION_UNITS = {"m": 60, "h": 3600, "d": 86400, "w": 604800}
 # Lines worth keeping when chiseling verbose output down to size.
 LOAD_BEARING_RE = re.compile(
     r"\b(error|exception|traceback|fail(?:ed|ure)?|fatal|panic|"
-    r"warn(?:ing)?|denied|refused|timeout|not found|assert\w*)\b",
+    r"warn(?:ing)?|denied|refused|timeout|not found|assert\w*)\b"
+    r"|\w*(?-i:Error|Exception)\b",
     re.IGNORECASE,
 )
 

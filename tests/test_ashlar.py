@@ -151,6 +151,18 @@ def test_chisel_keeps_error_lines_with_context(home, tmp_path):
     assert "debug line 0" not in result.stdout
 
 
+def test_chisel_keeps_camelcase_exception_lines(home, tmp_path):
+    lines = [f"debug line {i}" for i in range(20)]
+    lines[10] = 'raise ValueError("missing required field: customer_id")'
+    lines[11] = "ValueError: missing required field: customer_id"
+    src = tmp_path / "log.txt"
+    src.write_text("\n".join(lines))
+
+    result = run(["chisel", "--file", str(src), "--context", "0"], home)
+    assert "ValueError" in result.stdout
+    assert "missing required field: customer_id" in result.stdout
+
+
 def test_chisel_truncates_oversized_plain_output(home, tmp_path):
     src = tmp_path / "dump.txt"
     src.write_text("\n".join(f"hit {i}" for i in range(500)))
