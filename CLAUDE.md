@@ -2,8 +2,6 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-Memory-Vault: /Users/lucas/Documents/Obsidian Vault (Projekt-Unterordner: wiki/ashlar/)
-
 ## What this is
 
 Ashlar is a context-compaction toolkit for AI agents: it trims bloated tool output (repeated file reads, verbose logs, oversized search results) down to a dense, load-bearing block before it reaches the model — the "rough ashlar → perfect ashlar" pitch in README.md. All three tools are implemented: `record`/`report` (measure), `gavel` (dedup repeated reads), `chisel` (trim verbose output). `skill/ashlar/SKILL.md` packages `gavel`/`chisel` as a Claude Code skill (see Architecture below).
