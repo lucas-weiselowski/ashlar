@@ -1,6 +1,7 @@
 """End-to-end tests: invoke bin/ashlar as a subprocess, same as a real user would."""
 
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -11,12 +12,17 @@ ASHLAR = Path(__file__).resolve().parent.parent / "bin" / "ashlar"
 
 
 def run(args, home, input=None):
+    env = {"PATH": "/usr/bin:/bin", "HOME": str(home), "USERPROFILE": str(home)}
+    if os.name == "nt":
+        drive, tail = os.path.splitdrive(str(home))
+        env["HOMEDRIVE"] = drive or "C:"
+        env["HOMEPATH"] = tail or "\\"
     return subprocess.run(
         [sys.executable, str(ASHLAR), *args],
         input=input,
         capture_output=True,
         text=True,
-        env={"PATH": "/usr/bin:/bin", "HOME": str(home)},
+        env=env,
     )
 
 
@@ -149,6 +155,17 @@ def test_chisel_keeps_error_lines_with_context(home, tmp_path):
     assert "debug line 9" in result.stdout
     assert "debug line 11" in result.stdout
     assert "debug line 0" not in result.stdout
+
+
+def test_chisel_keeps_camelcase_exception_lines(home, tmp_path):
+    lines = [f"debug line {i}" for i in range(20)]
+    lines[10] = "Traceback (most recent call last):"
+    lines[14] = "ValueError: missing required field: customer_id"
+    src = tmp_path / "log.txt"
+    src.write_text("\n".join(lines))
+
+    result = run(["chisel", "--file", str(src)], home)
+    assert "ValueError: missing required field: customer_id" in result.stdout
 
 
 def test_chisel_truncates_oversized_plain_output(home, tmp_path):
