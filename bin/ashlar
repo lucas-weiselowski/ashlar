@@ -22,6 +22,11 @@ CHARS_PER_TOKEN = 4
 DURATION_UNITS = {"m": 60, "h": 3600, "d": 86400, "w": 604800}
 
 # Lines worth keeping when chiseling verbose output down to size.
+# The second alternative has no leading \b on purpose — CamelCase names like
+# ValueError/KeyError butt up against the preceding word with no boundary, so
+# \berror\b alone never matches them. It's scoped case-sensitive via (?-i:...)
+# so it only catches CamelCase, not e.g. "terror"/"preexception" matching the
+# lowercase "error"/"exception" substring under the pattern's global IGNORECASE.
 LOAD_BEARING_RE = re.compile(
     r"\b(error|exception|traceback|fail(?:ed|ure)?|fatal|panic|"
     r"warn(?:ing)?|denied|refused|timeout|not found|assert\w*)\b"
@@ -98,8 +103,7 @@ def cmd_gavel(args, _parser):
         output = f"<unchanged since last read: {args.key}>\n"
     else:
         old = cache_path.read_text()
-        note = "diffed against cached version"
-        output = "".join(
+        diff = "".join(
             difflib.unified_diff(
                 old.splitlines(keepends=True),
                 text.splitlines(keepends=True),
@@ -107,6 +111,12 @@ def cmd_gavel(args, _parser):
                 tofile=f"{args.key} (new)",
             )
         )
+        if _estimate_tokens(diff) < before_tokens:
+            note = "diffed against cached version"
+            output = diff
+        else:
+            note = "near-total rewrite, diff wasn't smaller — sent full content"
+            output = text
     cache_path.write_text(text)
 
     sys.stdout.write(output)
@@ -220,7 +230,8 @@ def cmd_report(args, _parser):
         after = sum(e["after"] for e in group)
         saved = before - after
         pct = (saved / before * 100) if before else 0
-        print(f"{label[:31]:<32}{len(group):>7}{before:>12,}{after:>12,}{saved:>12,}{pct:>5.0f}%")
+        display_label = label if len(label) <= 31 else label[:28] + "..."
+        print(f"{display_label:<32}{len(group):>7}{before:>12,}{after:>12,}{saved:>12,}{pct:>5.0f}%")
 
 
 def main():

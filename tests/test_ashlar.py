@@ -72,6 +72,15 @@ def test_report_by_label(home):
     assert "beta" in result.stdout
 
 
+def test_report_by_label_long_label_gets_visible_ellipsis(home):
+    long_label = "x" * 40
+    run(["record", "--before", "1000", "--after", "500", "--label", long_label], home)
+
+    result = run(["report", "--by-label"], home)
+    assert "x" * 28 + "..." in result.stdout
+    assert long_label not in result.stdout
+
+
 def test_report_since_excludes_old_entries(home):
     run(["record", "--before", "1000", "--after", "500", "--label", "recent"], home)
 
@@ -107,15 +116,29 @@ def test_gavel_unchanged_returns_marker(home, tmp_path):
 
 def test_gavel_diff_on_change(home, tmp_path):
     src = tmp_path / "file.py"
-    src.write_text("line1\nline2\n")
+    lines = [f"line{i}" for i in range(50)]
+    src.write_text("\n".join(lines) + "\n")
     run(["gavel", "--key", "file.py", "--file", str(src)], home)
 
-    src.write_text("line1\nline2-changed\n")
+    lines[25] = "line25-changed"
+    src.write_text("\n".join(lines) + "\n")
     result = run(["gavel", "--key", "file.py", "--file", str(src)], home)
 
-    assert "-line2" in result.stdout
-    assert "+line2-changed" in result.stdout
+    assert "-line25" in result.stdout
+    assert "+line25-changed" in result.stdout
     assert "diffed against cached version" in result.stderr
+
+
+def test_gavel_near_total_rewrite_sends_full_content_not_diff(home, tmp_path):
+    src = tmp_path / "file.py"
+    src.write_text("\n".join(f"old line {i}" for i in range(50)) + "\n")
+    run(["gavel", "--key", "file.py", "--file", str(src)], home)
+
+    src.write_text("\n".join(f"totally different content {i}" for i in range(50)) + "\n")
+    result = run(["gavel", "--key", "file.py", "--file", str(src)], home)
+
+    assert result.stdout == src.read_text()
+    assert "near-total rewrite" in result.stderr
 
 
 def test_gavel_record_flag_writes_ledger(home, tmp_path):
