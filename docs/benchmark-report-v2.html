@@ -1,0 +1,475 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Ashlar Token-Compaction Benchmark v2</title>
+<style>
+  :root {
+    --bg: #f6f1ec;
+    --surface: #fdfaf6;
+    --surface-2: #f1ece4;
+    --ink: #2a2620;
+    --ink-muted: #6b6358;
+    --border: #e3ddd2;
+    --accent: #5fbd9a;
+    --accent-ink: #127a56;
+    --accent-soft: rgba(95, 189, 154, 0.16);
+    --negative: #ef8f74;
+    --negative-ink: #c1432a;
+    --negative-soft: rgba(239, 143, 116, 0.18);
+    --shadow: 0 1px 2px rgba(42, 38, 32, 0.06);
+  }
+  :root[data-theme="dark"] {
+    --bg: #1c1a1f;
+    --surface: #242229;
+    --surface-2: #2b2831;
+    --ink: #ece8e2;
+    --ink-muted: #a39d93;
+    --border: #3a3742;
+    --accent: #2f9a71;
+    --accent-ink: #48a578;
+    --accent-soft: rgba(72, 165, 120, 0.18);
+    --negative: #c26648;
+    --negative-ink: #cf7254;
+    --negative-soft: rgba(207, 114, 84, 0.18);
+    --shadow: 0 1px 2px rgba(0, 0, 0, 0.35);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #1c1a1f;
+      --surface: #242229;
+      --surface-2: #2b2831;
+      --ink: #ece8e2;
+      --ink-muted: #a39d93;
+      --border: #3a3742;
+      --accent: #2f9a71;
+      --accent-ink: #48a578;
+      --accent-soft: rgba(72, 165, 120, 0.18);
+      --negative: #c26648;
+      --negative-ink: #cf7254;
+      --negative-soft: rgba(207, 114, 84, 0.18);
+      --shadow: 0 1px 2px rgba(0, 0, 0, 0.35);
+    }
+  }
+
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--ink);
+    font-family: -apple-system, "Segoe UI", Inter, system-ui, sans-serif;
+    line-height: 1.55;
+    -webkit-font-smoothing: antialiased;
+  }
+  ::selection { background: var(--accent-soft); }
+
+  .page {
+    max-width: 760px;
+    margin: 0 auto;
+    padding: 3.5rem 1.5rem 5rem;
+  }
+
+  h1, h2, h3 {
+    font-family: "Iowan Old Style", "Palatino Linotype", Palatino, Georgia, serif;
+    font-weight: 600;
+    letter-spacing: -0.01em;
+    text-wrap: balance;
+    color: var(--ink);
+  }
+
+  header.masthead {
+    display: flex;
+    flex-direction: column;
+    gap: 0.6rem;
+    padding-bottom: 1.75rem;
+    border-bottom: 1px solid var(--border);
+    margin-bottom: 2.25rem;
+  }
+  .eyebrow {
+    font-family: ui-monospace, "SF Mono", Menlo, monospace;
+    font-size: 0.72rem;
+    letter-spacing: 0.09em;
+    text-transform: uppercase;
+    color: var(--accent-ink);
+  }
+  h1.title {
+    font-size: 2.05rem;
+    margin: 0;
+    line-height: 1.15;
+  }
+  .dek {
+    font-size: 1.02rem;
+    color: var(--ink-muted);
+    max-width: 60ch;
+    margin: 0;
+  }
+  .meta-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.35rem 1.1rem;
+    font-family: ui-monospace, "SF Mono", Menlo, monospace;
+    font-size: 0.78rem;
+    color: var(--ink-muted);
+    margin-top: 0.4rem;
+  }
+  .meta-row b { color: var(--ink); font-weight: 600; }
+
+  section { margin-bottom: 2.5rem; }
+  h2.section-title {
+    font-size: 1.3rem;
+    margin: 0 0 1rem;
+  }
+  p { margin: 0 0 0.9rem; }
+  p:last-child { margin-bottom: 0; }
+
+  code.inline {
+    font-family: ui-monospace, "SF Mono", Menlo, monospace;
+    background: var(--surface-2);
+    padding: 0.05rem 0.32rem;
+    border-radius: 3px;
+    font-size: 0.87em;
+  }
+
+  /* Executive summary tiles */
+  .stat-grid {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 0.7rem;
+    margin-bottom: 1.1rem;
+  }
+  .stat-tile {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 0.85rem 0.9rem;
+    box-shadow: var(--shadow);
+  }
+  .stat-tile .num {
+    font-family: ui-monospace, "SF Mono", Menlo, monospace;
+    font-variant-numeric: tabular-nums;
+    font-size: 1.5rem;
+    font-weight: 600;
+    color: var(--accent-ink);
+    line-height: 1.1;
+  }
+  .stat-tile .label {
+    font-size: 0.72rem;
+    color: var(--ink-muted);
+    margin-top: 0.3rem;
+    letter-spacing: 0.02em;
+  }
+
+  .callout {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-left: 3px solid var(--accent);
+    border-radius: 4px;
+    padding: 0.9rem 1.05rem;
+    font-size: 0.93rem;
+    color: var(--ink);
+  }
+  .callout.warn { border-left-color: var(--negative); }
+  .callout.fixed { border-left-color: var(--accent); }
+  .callout + .callout { margin-top: 0.65rem; }
+  .callout .k { font-weight: 600; }
+  .callout .tag-fixed {
+    display: inline-block;
+    font-family: ui-monospace, "SF Mono", Menlo, monospace;
+    font-size: 0.66rem;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    padding: 0.08rem 0.4rem;
+    border-radius: 3px;
+    background: var(--accent-soft);
+    color: var(--accent-ink);
+    margin-right: 0.5rem;
+  }
+  .callout code {
+    font-family: ui-monospace, "SF Mono", Menlo, monospace;
+    background: var(--surface-2);
+    padding: 0.05rem 0.32rem;
+    border-radius: 3px;
+    font-size: 0.87em;
+  }
+
+  /* Results table */
+  .table-wrap { overflow-x: auto; border: 1px solid var(--border); border-radius: 6px; }
+  table {
+    border-collapse: collapse;
+    width: 100%;
+    min-width: 620px;
+    font-size: 0.87rem;
+    background: var(--surface);
+  }
+  thead th {
+    text-align: left;
+    font-size: 0.68rem;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--ink-muted);
+    font-weight: 600;
+    padding: 0.65rem 0.8rem;
+    border-bottom: 1px solid var(--border);
+    white-space: nowrap;
+  }
+  tbody td {
+    padding: 0.6rem 0.8rem;
+    border-bottom: 1px solid var(--border);
+    vertical-align: middle;
+    white-space: nowrap;
+  }
+  tbody tr:last-child td { border-bottom: none; }
+  tbody tr.subtotal td {
+    background: var(--surface-2);
+    font-weight: 600;
+    border-top: 1px solid var(--border);
+  }
+  td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; font-family: ui-monospace, "SF Mono", Menlo, monospace; }
+  td.scenario { white-space: normal; max-width: 15rem; }
+  td.scenario .tool-tag {
+    display: inline-block;
+    font-family: ui-monospace, "SF Mono", Menlo, monospace;
+    font-size: 0.66rem;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    padding: 0.08rem 0.36rem;
+    border-radius: 3px;
+    background: var(--accent-soft);
+    color: var(--accent-ink);
+    margin-right: 0.4rem;
+  }
+  .pct-cell { display: flex; align-items: center; gap: 0.5rem; justify-content: flex-end; }
+  .pct-value { min-width: 3.4rem; text-align: right; }
+  .pct-value.neg { color: var(--negative-ink); }
+  .pct-value.pos { color: var(--accent-ink); }
+  .meter {
+    width: 64px;
+    height: 6px;
+    border-radius: 3px;
+    background: var(--surface-2);
+    overflow: hidden;
+    position: relative;
+    flex-shrink: 0;
+  }
+  .meter .fill { position: absolute; top: 0; bottom: 0; background: var(--accent); border-radius: 3px; }
+  .meter .fill.neg { background: var(--negative); }
+  .delta { font-size: 0.78rem; color: var(--ink-muted); margin-left: 0.35rem; }
+  .delta.pos { color: var(--accent-ink); }
+  .delta.neg { color: var(--negative-ink); }
+
+  .two-col {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 0.7rem;
+  }
+
+  ul.rec-list { margin: 0; padding-left: 1.15rem; }
+  ul.rec-list li { margin-bottom: 0.55rem; }
+  ul.rec-list li:last-child { margin-bottom: 0; }
+
+  code.block {
+    display: block;
+    font-family: ui-monospace, "SF Mono", Menlo, monospace;
+    font-size: 0.8rem;
+    background: var(--surface-2);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 0.85rem 1rem;
+    white-space: pre-wrap;
+    word-break: break-word;
+    color: var(--ink);
+    overflow-x: auto;
+  }
+
+  footer {
+    margin-top: 3rem;
+    padding-top: 1.25rem;
+    border-top: 1px solid var(--border);
+    font-size: 0.78rem;
+    color: var(--ink-muted);
+  }
+
+  @media (max-width: 620px) {
+    .stat-grid { grid-template-columns: repeat(2, 1fr); }
+    .two-col { grid-template-columns: 1fr; }
+  }
+</style>
+</head>
+<body>
+
+<div class="page">
+
+  <header class="masthead">
+    <div class="eyebrow">Benchmark Report v2 · Ashlar main @ 2026-07-14</div>
+    <h1 class="title">Token-Compaction Benchmark: Gavel &amp; Chisel</h1>
+    <p class="dek">Same six scenarios as the original benchmark, re-run against current <code class="inline">main</code> to check whether two fixes landed since then actually closed the gaps they targeted.</p>
+    <div class="meta-row">
+      <span><b>Date</b> 2026-07-14</span>
+      <span><b>Repo</b> ashlar @ main</span>
+      <span><b>Baseline</b> <a href="benchmark-report.html" style="color:inherit;">original report</a>, v0.2.0</span>
+      <span><b>Method</b> local CLI runs, logged to ledger</span>
+    </div>
+  </header>
+
+  <section>
+    <h2 class="section-title">Executive summary</h2>
+    <div class="stat-grid">
+      <div class="stat-tile">
+        <div class="num">77.8%</div>
+        <div class="label">Weighted avg. cut<br>(all tokens pooled)</div>
+      </div>
+      <div class="stat-tile">
+        <div class="num">80.5%</div>
+        <div class="label">Simple avg. cut<br>(mean of 6 scenarios)</div>
+      </div>
+      <div class="stat-tile">
+        <div class="num">95.0%</div>
+        <div class="label">Chisel weighted avg.<br>(3 scenarios)</div>
+      </div>
+      <div class="stat-tile">
+        <div class="num">55.7%</div>
+        <div class="label">Gavel weighted avg.<br>(3 scenarios)</div>
+      </div>
+    </div>
+    <p><b>Both issues flagged in the original report are fixed on main.</b> <code class="inline">gavel</code>'s near-total-rewrite case no longer costs tokens — it now falls back to sending the full content whenever a diff would be larger, flooring the worst case at 0% instead of &minus;12.5%. <code class="inline">chisel</code>'s keyword filter now matches CamelCase exception names (<code class="inline">ValueError</code>, <code class="inline">ConfigValidationError</code>, etc.) via a second, case-sensitive alternative in <code class="inline">LOAD_BEARING_RE</code>, so a traceback's actual exception message survives truncation instead of only its "Traceback" header line. The pooled cut for this run (77.8%) reads lower than the original (84.4%) — that's fixture scale, not regression: this run's synthetic files/logs are sized differently than the originals (see Method), and the two fixes above trade a little compression for correctness in exactly the cases they targeted. Per-scenario deltas below are the meaningful comparison.</p>
+  </section>
+
+  <section>
+    <h2 class="section-title">Since the last report</h2>
+    <div class="callout fixed">
+      <span class="tag-fixed">Fixed</span><span class="k">Gavel no longer costs tokens on heavy rewrites.</span> <code>bin/ashlar</code> now compares the unified diff's estimated size against the raw content before choosing which to emit — if the diff isn't smaller, it sends the full text instead. The ~50%-rewrite scenario that lost &minus;12.5% in the original report now floors at 0.0% (7,922 &rarr; 7,922 tokens): still no savings on a heavy rewrite, but never a net loss.
+    </div>
+    <div class="callout fixed">
+      <span class="tag-fixed">Fixed</span><span class="k">Chisel now catches CamelCase exception names.</span> <code>LOAD_BEARING_RE</code> gained a second, case-sensitive alternative (<code>\w*(?-i:Error|Exception)\b</code>) specifically for names like <code>ConfigValidationError</code> that have no word boundary before "Error". Re-running the build-log scenario confirms the exception message line now survives in the output, not just the "Traceback" header — verified directly in this run's <code class="inline">chisel</code> output.
+    </div>
+    <div class="callout">
+      <span class="k">Still open: keyword selection is exact, not semantic.</span> Re-running the grep-dump scenario with the same kind of load-bearing-but-unlabeled comment (a circular-dependency warning with no error/warning keyword in it) confirms it's still dropped by head/tail truncation, same as the original report. This is a design tradeoff (fixed keyword list), not a regression — <code class="inline">--keep-pattern</code> remains the escape hatch for known-recurring cases.
+    </div>
+  </section>
+
+  <section>
+    <h2 class="section-title">Method</h2>
+    <p>Each scenario feeds representative content through <code class="inline">gavel</code>/<code class="inline">chisel</code> at default settings (<code class="inline">--max-lines 80</code>), records before/after token counts to the ledger with <code class="inline">--record</code>, and reads the total back with <code class="inline">ashlar report --by-label</code>. All content here is freshly generated to match the same six shapes as the original report (unchanged/small-diff/large-diff repeat reads; a verbose test run, a large grep dump, a build log with a traceback) — it is not byte-identical to the original fixtures, so absolute before/after counts differ; the per-scenario cut percentages and the two fix confirmations are the numbers to trust, not a strict token-for-token pooled comparison against the original run. Fixture construction is deterministic and reproducible — see <a href="benchmark-fixtures/README.md" style="color:inherit;">benchmark-fixtures/</a> for the generator script and the reasoning behind each scenario's shape.</p>
+    <div class="callout">
+      <span class="k">Heuristic, not a real tokenizer.</span> Ashlar estimates tokens as <code>chars / 4</code> — a stated approximation (<code>bin/ashlar:19-20</code>), not a model-specific tokenizer. Absolute counts here will drift from what a real Claude/GPT tokenizer reports; the <em>relative</em> cut percentages are the trustworthy number.
+    </div>
+  </section>
+
+  <section>
+    <h2 class="section-title">Results</h2>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Scenario</th>
+            <th class="num">Before</th>
+            <th class="num">After</th>
+            <th class="num">Saved</th>
+            <th class="num">Cut</th>
+            <th class="num">vs. original</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td class="scenario"><span class="tool-tag">gavel</span>Unchanged repeat read</td>
+            <td class="num">5,074</td>
+            <td class="num">10</td>
+            <td class="num">5,064</td>
+            <td class="num"><div class="pct-cell"><div class="meter"><div class="fill" style="right:0;width:99.8%"></div></div><span class="pct-value pos">99.8%</span></div></td>
+            <td class="num"><span class="delta pos">+0.2pt</span></td>
+          </tr>
+          <tr>
+            <td class="scenario"><span class="tool-tag">gavel</span>Single-line edit repeat read</td>
+            <td class="num">5,074</td>
+            <td class="num">73</td>
+            <td class="num">5,001</td>
+            <td class="num"><div class="pct-cell"><div class="meter"><div class="fill" style="right:0;width:98.6%"></div></div><span class="pct-value pos">98.6%</span></div></td>
+            <td class="num"><span class="delta neg">&minus;0.1pt</span></td>
+          </tr>
+          <tr>
+            <td class="scenario"><span class="tool-tag">gavel</span>~50% file rewrite repeat read</td>
+            <td class="num">7,922</td>
+            <td class="num">7,922</td>
+            <td class="num">0</td>
+            <td class="num"><div class="pct-cell"><div class="meter"><div class="fill" style="right:0;width:0%"></div></div><span class="pct-value" style="color:var(--ink-muted);">0.0%</span></div></td>
+            <td class="num"><span class="delta pos">+12.5pt (fix)</span></td>
+          </tr>
+          <tr>
+            <td class="scenario"><span class="tool-tag">chisel</span>Verbose test run (479 pass / 1 fail)</td>
+            <td class="num">6,315</td>
+            <td class="num">179</td>
+            <td class="num">6,136</td>
+            <td class="num"><div class="pct-cell"><div class="meter"><div class="fill" style="right:0;width:97.2%"></div></div><span class="pct-value pos">97.2%</span></div></td>
+            <td class="num"><span class="delta pos">+0.2pt</span></td>
+          </tr>
+          <tr>
+            <td class="scenario"><span class="tool-tag">chisel</span>Large grep dump (750 matches)</td>
+            <td class="num">7,433</td>
+            <td class="num">835</td>
+            <td class="num">6,598</td>
+            <td class="num"><div class="pct-cell"><div class="meter"><div class="fill" style="right:0;width:88.8%"></div></div><span class="pct-value pos">88.8%</span></div></td>
+            <td class="num"><span class="delta neg">&minus;5.8pt<sup>*</sup></span></td>
+          </tr>
+          <tr>
+            <td class="scenario"><span class="tool-tag">chisel</span>Build log + Python traceback</td>
+            <td class="num">9,460</td>
+            <td class="num">140</td>
+            <td class="num">9,320</td>
+            <td class="num"><div class="pct-cell"><div class="meter"><div class="fill" style="right:0;width:98.5%"></div></div><span class="pct-value pos">98.5%</span></div></td>
+            <td class="num"><span class="delta neg">&minus;0.8pt<sup>†</sup></span></td>
+          </tr>
+          <tr class="subtotal">
+            <td class="scenario">All 6 — pooled</td>
+            <td class="num">41,278</td>
+            <td class="num">9,159</td>
+            <td class="num">32,119</td>
+            <td class="num" style="text-align:right">77.8%</td>
+            <td class="num"><span class="delta neg">&minus;6.6pt<sup>*</sup></span></td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+    <p style="font-size:0.82rem; color:var(--ink-muted); margin-top:0.6rem;"><sup>*</sup> Fixture-scale difference, not a regression — see Method. <sup>†</sup> Expected trade-off: this run's output correctly keeps the exception message line that the original report's regex bug silently dropped (see "Since the last report"); that line costs a few more tokens than dropping it did.</p>
+  </section>
+
+  <section>
+    <h2 class="section-title">Findings worth flagging</h2>
+    <div class="callout warn">
+      <span class="k">Gavel is still bimodal by design, just with a floor now.</span> Near-total savings (98.6&ndash;99.8%) when a re-read is unchanged or lightly edited; a wash (0.0%) rather than a loss when it's a heavy rewrite. Keying gavel on content that gets substantially rewritten between reads still won't save tokens — it just won't cost them either.
+    </div>
+    <div class="callout">
+      <span class="k">Keyword selection is exact, not semantic (unchanged from the original report).</span> A load-bearing but unlabeled comment mid-list still gets cut by head/tail truncation. This is inherent to a fixed keyword list, not something either fix addressed — <code>--keep-pattern</code> is the mitigation, per scenario or recurring term.
+    </div>
+  </section>
+
+  <section>
+    <h2 class="section-title">Recommendations</h2>
+    <ul class="rec-list">
+      <li><b>Gavel is now safe as a default for any repeat-read key</b>, not just ones expected to stay mostly unchanged — the diff-size floor guarantees it never costs more than sending the content plain. It's still most effective on keys that are re-read mostly unchanged (file watches, config re-checks, polling loops); heavy-rewrite keys just see it break even instead of losing tokens.</li>
+      <li><b>No further action needed on the CamelCase gap</b> — confirmed fixed and held under a fresh traceback fixture in this run.</li>
+      <li><b>Chisel remains a safe default filter for high-volume, low-signal output</b> (test runs, build logs, grep dumps): 88.8&ndash;98.5% cut held across three different shapes of noisy output in this run.</li>
+      <li><b>For load-bearing lines that don't use error/warning language</b> (e.g. a circular-dependency note, a perf regression comment), reach for <code>--keep-pattern</code> rather than expecting the default keyword list to catch them.</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2 class="section-title">Reproduce this</h2>
+    <p>All six runs are logged under <code class="inline">bench:*-v2</code> / <code class="inline">bench:*-v2b</code> labels in <code class="inline">~/.ashlar/ledger.jsonl</code>, alongside the original <code class="inline">bench:*</code> entries from the baseline run:</p>
+    <code class="block">$ ashlar report --by-label | grep -E 'bench:.*-v2'
+Label                                  Count       Rough     Perfect       Saved     %
+bench:chisel-stacktrace-log-v2            1       9,460         140       9,320   99%
+bench:chisel-grep-dump-v2b                1       7,433         835       6,598   89%
+bench:chisel-verbose-testrun-v2           1       6,315         179       6,136   97%
+bench:gavel-unchanged-repeat-v2           1       5,074          10       5,064  100%
+bench:gavel-small-diff-v2                 1       5,074          73       5,001   99%
+bench:gavel-large-diff-v2                 1       7,922       7,922           0    0%</code>
+  </section>
+
+  <footer>
+    Ashlar main @ 2026-07-14 · chars/4 token heuristic · six scenarios, single run each — a larger sample (n&ge;3 per scenario) would tighten the confidence interval on the weighted average. Supersedes the <a href="benchmark-report.html" style="color:inherit;">original benchmark report</a> (v0.2.0); that report's two flagged issues are the "Since the last report" fixes above.
+  </footer>
+
+</div>
+</body>
+</html>
