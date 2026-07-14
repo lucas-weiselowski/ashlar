@@ -3,6 +3,9 @@
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versioning follows [SemVer](https://semver.org/).
 
 ## [Unreleased]
+### Added
+- `release.yml` verify job now checks `.claude-plugin/plugin.json`'s `version` matches the release tag, same as it already does for `bin/ashlar`'s `__version__` — a forgotten bump there used to pass CI silently while leaving installed plugin users stuck without updates.
+
 ### Changed
 - README: reconciled "three tools" vs "four subcommands" phrasing, renamed "Keeping the Ledger" section to "Using the CLI" since it documents all four subcommands, not just `record`/`report`.
 
