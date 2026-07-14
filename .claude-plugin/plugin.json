@@ -10,5 +10,19 @@
   "repository": "https://github.com/lucas-weiselowski/ashlar",
   "license": "MIT",
   "keywords": ["context", "compaction", "tokens", "cli", "productivity"],
-  "skills": "./skill"
+  "skills": "./skill",
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/posttooluse_bash_chisel.py\"",
+            "timeout": 12
+          }
+        ]
+      }
+    ]
+  }
 }

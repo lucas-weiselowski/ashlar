@@ -3,8 +3,14 @@
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versioning follows [SemVer](https://semver.org/).
 
 ## [Unreleased]
+### Added
+- `hooks/posttooluse_bash_chisel.py` — Claude Code `PostToolUse` hook (matcher `Bash`) that transparently chisels large Bash stdout before it reaches the model, no manual invocation required. Skips small output (<500 estimated tokens), never touches `stderr`/`interrupted`/`isImage`, always preserves the final 20 lines of stdout verbatim, fails safe to a pure passthrough on any malformed input or internal error, and auto-records before/after token counts to the ledger (`auto:posttooluse:bash`). Wired into `.claude-plugin/plugin.json`.
+
 ### Changed
 - README: reconciled "three tools" vs "four subcommands" phrasing, renamed "Keeping the Ledger" section to "Using the CLI" since it documents all four subcommands, not just `record`/`report`.
+
+### Fixed
+- `chisel`'s middle-elision (`--max-lines`) could silently drop a load-bearing line the keyword regex didn't recognize, with no way to recover it — safe enough for manual/human-checked use, but not for the new automatic hook. Elision now always saves the full original to `~/.ashlar/chisel/<hash>.txt` and points to it from the elision marker. `LOAD_BEARING_RE` also gained `critical`, `alert`, `abort(ed)?`, `invalid`, `corrupt(ed)?`.
 
 ## [0.2.0] - 2026-07-14
 ### Added

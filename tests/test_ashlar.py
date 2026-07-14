@@ -161,6 +161,24 @@ def test_chisel_truncates_oversized_plain_output(home, tmp_path):
     assert "lines elided" in result.stdout
 
 
+def test_chisel_elision_keeps_full_original_recoverable(home, tmp_path):
+    # Regression: a load-bearing line phrased in words the keyword regex doesn't
+    # recognize can land inside the elided middle. Elision must never be a dead
+    # end — the marker must point to a full copy that still has it.
+    lines = [f"debug noise {i}" for i in range(500)]
+    lines[250] = "Signature mismatch: build halted (code 77)"
+    src = tmp_path / "dump.txt"
+    src.write_text("\n".join(lines))
+
+    result = run(["chisel", "--file", str(src), "--max-lines", "20"], home)
+    assert "Signature mismatch" not in result.stdout  # confirms the regex gap is real
+    assert "full original at" in result.stdout
+
+    full_path = result.stdout.split("full original at ", 1)[1].split(" ...")[0]
+    assert Path(full_path).exists()
+    assert "Signature mismatch: build halted (code 77)" in Path(full_path).read_text()
+
+
 def test_chisel_record_flag_writes_ledger(home, tmp_path):
     src = tmp_path / "log.txt"
     src.write_text("ERROR: boom\n")
