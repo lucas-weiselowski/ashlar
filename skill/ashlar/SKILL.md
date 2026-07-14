@@ -43,11 +43,11 @@ the original, which is expected and reported honestly, not hidden.
 ## chisel — trim verbose text to load-bearing lines
 
 Collapses consecutive duplicate lines to `line  (×N)`, keeps lines matching
-error/exception/traceback/fail/fatal/panic/warn/timeout/etc. plus
-`--context` lines around each match (default 2), and — if nothing matches,
-or the result is still too long — falls back to head/tail truncation
-(`--max-lines`, default 200) with a `... N lines elided ...` marker for the
-middle.
+error/exception/traceback/fail/fatal/panic/critical/alert/abort/invalid/
+corrupt/warn/denied/refused/timeout/"not found"/assert/etc. plus `--context`
+lines around each match (default 2), and — if nothing matches, or the result
+is still too long — falls back to head/tail truncation (`--max-lines`,
+default 200) with a `... N lines elided ...` marker for the middle.
 
 ```
 some_command_that_dumps_a_huge_log 2>&1 | ashlar chisel --max-lines 80
@@ -55,6 +55,14 @@ some_command_that_dumps_a_huge_log 2>&1 | ashlar chisel --max-lines 80
 
 Tune `--context` up if a matched error needs more surrounding lines to be
 useful; tune `--max-lines` down for a harder cap on genuinely huge dumps.
+
+The keyword list is inherently incomplete — a load-bearing line phrased
+outside it can still get filtered out. Whenever chisel drops anything (by
+keyword filter or by elision), it appends `⟨ashlar: N→M lines kept, full
+original at PATH⟩` — that path is a full, unfiltered recovery copy under
+`~/.ashlar/chisel/`, written 0600 (command output routinely contains
+secrets) and pruned to the 200 most recent. Check it if compacted output
+looks like it's missing something.
 
 ## record/report — track savings
 

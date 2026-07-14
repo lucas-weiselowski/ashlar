@@ -11,6 +11,11 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Version
 
 ### Fixed
 - `chisel`'s middle-elision (`--max-lines`) could silently drop a load-bearing line the keyword regex didn't recognize, with no way to recover it — safe enough for manual/human-checked use, but not for the new automatic hook. Elision now always saves the full original to `~/.ashlar/chisel/<hash>.txt` and points to it from the elision marker. `LOAD_BEARING_RE` also gained `critical`, `alert`, `abort(ed)?`, `invalid`, `corrupt(ed)?`.
+- The recovery fix above only covered the `--max-lines` elision branch — the more common path (the keyword filter itself dropping every line outside `±context` of a match, without ever reaching elision) had no recovery at all. `cmd_chisel` now saves a recovery copy and appends the same pointer whenever *any* line is dropped, filtered or elided.
+- Recovery copies hold full, unredacted command output and are now written far more often (automatically, via the hook, on any drop) — they're written `0600` instead of the default mode, and `~/.ashlar/chisel/` is pruned to the 200 most recent files instead of growing forever.
+- `hooks/posttooluse_bash_chisel.py`'s tail-guard compared against raw stdout lines, but chisel collapses repeated lines into `line  (×N)` first — so a repetitive tail (retry loops, progress output) always failed the guard's `endswith` check and got re-appended as raw duplicates on top of the collapsed summary. The guard now checks each tail line's presence individually, collapsed form included.
+- `hooks/posttooluse_bash_chisel.py` spawned two subprocesses per compacted call (`chisel`, then a separate `record`) — now a single `ashlar chisel --record` call does both.
+- `hooks/posttooluse_bash_chisel.py` had no upper bound on input size before hashing/writing/regex-scanning; stdout over ~2MB now passes through untouched instead of paying that cost on a hot path.
 
 ## [0.2.0] - 2026-07-14
 ### Added

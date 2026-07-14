@@ -157,8 +157,13 @@ def test_chisel_truncates_oversized_plain_output(home, tmp_path):
 
     result = run(["chisel", "--file", str(src), "--max-lines", "20"], home)
     out_lines = result.stdout.splitlines()
-    assert len(out_lines) == 21  # 20 kept + 1 elision marker
+    assert len(out_lines) == 22  # 20 kept + 1 elision marker + 1 recovery footer
     assert "lines elided" in result.stdout
+    assert "full original at" in result.stdout
+
+
+def _extract_recovery_path(stdout):
+    return stdout.split("full original at ", 1)[1].split("⟩")[0]
 
 
 def test_chisel_elision_keeps_full_original_recoverable(home, tmp_path):
@@ -174,9 +179,59 @@ def test_chisel_elision_keeps_full_original_recoverable(home, tmp_path):
     assert "Signature mismatch" not in result.stdout  # confirms the regex gap is real
     assert "full original at" in result.stdout
 
-    full_path = result.stdout.split("full original at ", 1)[1].split(" ...")[0]
+    full_path = _extract_recovery_path(result.stdout)
     assert Path(full_path).exists()
     assert "Signature mismatch: build halted (code 77)" in Path(full_path).read_text()
+
+
+def test_chisel_keyword_filter_alone_stays_recoverable(home, tmp_path):
+    # Regression: recovery previously only triggered on --max-lines elision, so a
+    # small input that never reaches elision but still gets keyword-filtered
+    # (the common case — most chiseled output isn't 500+ lines) had no recovery
+    # path at all. This is the bug the adversarial review actually found: the
+    # fix for elision alone didn't cover the filter's own drops.
+    lines = [f"debug line {i}" for i in range(50)]
+    lines[10] = "warning: minor thing"
+    lines[40] = "Tests: 42 passed, 3 broken"
+    src = tmp_path / "log.txt"
+    src.write_text("\n".join(lines))
+
+    result = run(["chisel", "--file", str(src)], home)
+    assert "Tests: 42 passed, 3 broken" not in result.stdout  # confirms the drop is real
+    assert "full original at" in result.stdout
+
+    full_path = _extract_recovery_path(result.stdout)
+    assert Path(full_path).exists()
+    assert "Tests: 42 passed, 3 broken" in Path(full_path).read_text()
+
+
+def test_chisel_recovery_file_is_owner_only(home, tmp_path):
+    # Recovery copies hold full, unredacted command output (secrets included) —
+    # they must not be group/world-readable.
+    lines = [f"debug line {i}" for i in range(50)]
+    lines[10] = "warning: trigger a drop"
+    src = tmp_path / "log.txt"
+    src.write_text("\n".join(lines))
+
+    result = run(["chisel", "--file", str(src)], home)
+    full_path = _extract_recovery_path(result.stdout)
+    mode = Path(full_path).stat().st_mode & 0o777
+    assert mode == 0o600
+
+
+def test_chisel_recovery_dir_is_pruned(home, tmp_path):
+    chisel_dir = home / ".ashlar" / "chisel"
+    chisel_dir.mkdir(parents=True)
+    for i in range(205):
+        (chisel_dir / f"stale-{i}.txt").write_text("old")
+
+    lines = [f"debug line {i}" for i in range(50)]
+    lines[10] = "warning: trigger a drop"
+    src = tmp_path / "log.txt"
+    src.write_text("\n".join(lines))
+    run(["chisel", "--file", str(src)], home)
+
+    assert len(list(chisel_dir.glob("*.txt"))) <= 200
 
 
 def test_chisel_record_flag_writes_ledger(home, tmp_path):
