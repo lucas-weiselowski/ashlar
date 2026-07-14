@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 520 220" width="520" height="220">
+  <rect width="520" height="220" fill="#0d0d0f"/>
+
+  <!-- rough ashlar: jagged polygon -->
+  <polygon points="40,150 70,90 60,60 100,50 140,70 150,110 130,160 90,175"
+           fill="#3a362f" stroke="#c9a24b" stroke-width="2"/>
+  <text x="95" y="200" font-family="Georgia, serif" font-size="16" fill="#8a7a52" text-anchor="middle">ROUGH</text>
+
+  <!-- arrow -->
+  <g stroke="#c9a24b" stroke-width="2.5">
+    <line x1="185" y1="115" x2="330" y2="115"/>
+    <polygon points="330,108 345,115 330,122" fill="#c9a24b"/>
+  </g>
+
+  <!-- perfect ashlar: clean cube -->
+  <g stroke="#e8d9ad" stroke-width="2" fill="#4a4436">
+    <polygon points="410,70 470,70 470,150 410,150"/>
+    <polygon points="410,70 430,55 490,55 470,70"/>
+    <polygon points="470,70 490,55 490,135 470,150"/>
+  </g>
+  <text x="440" y="200" font-family="Georgia, serif" font-size="16" fill="#e8d9ad" text-anchor="middle">PERFECT</text>
+</svg>

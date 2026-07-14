@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 200" width="640" height="200">
+  <rect width="640" height="200" fill="#0d0d0f"/>
+
+  <g stroke="#c9a24b" stroke-width="2.5" fill="none">
+    <!-- compass -->
+    <path d="M 130 150 L 100 60 L 70 150"/>
+    <circle cx="100" cy="60" r="4" fill="#c9a24b" stroke="none"/>
+    <!-- square -->
+    <path d="M 70 150 L 160 150 L 160 90"/>
+  </g>
+
+  <!-- ashlar cube at the crossing -->
+  <g stroke="#c9a24b" stroke-width="2" fill="none">
+    <polygon points="100,108 118,118 118,138 100,148 82,138 82,118"/>
+    <line x1="100" y1="108" x2="100" y2="128"/>
+    <line x1="100" y1="128" x2="118" y2="138"/>
+    <line x1="100" y1="128" x2="82" y2="138"/>
+  </g>
+
+  <text x="220" y="100" font-family="Georgia, 'Times New Roman', serif" font-size="52" letter-spacing="8" fill="#e8d9ad">ASHLAR</text>
+  <text x="222" y="130" font-family="Georgia, 'Times New Roman', serif" font-size="15" letter-spacing="4" fill="#8a7a52">HEW THE ROUGH STONE</text>
+</svg>
