@@ -594,3 +594,72 @@ def test_parse_duration_rejects_empty_string(home):
     result = run(["report", "--since", ""], home)
     assert result.returncode != 0
     assert "invalid duration" in result.stderr
+
+
+def test_doctor_fresh_install_reports_empty_state(home):
+    result = run(["doctor"], home)
+    assert result.returncode == 0
+    assert "ashlar" in result.stdout
+    assert "not created yet" in result.stdout
+    assert "empty" in result.stdout
+
+
+def test_doctor_reports_ledger_and_cache_activity(home, tmp_path):
+    run(["record", "--before", "1000", "--after", "100", "--label", "smoke"], home)
+    src = tmp_path / "file.txt"
+    src.write_text("hello\n")
+    run(["gavel", "--key", "file.txt", "--file", str(src), "--record"], home)
+
+    result = run(["doctor"], home)
+    assert result.returncode == 0
+    assert "2 entries," in result.stdout  # record + gavel --record each append one
+    assert "Gavel cache" in result.stdout
+    assert "empty" not in result.stdout.split("Gavel cache")[1].split("\n")[1]
+
+
+def test_doctor_finds_hook_and_emits_manual_wiring_snippet(home):
+    # This repo's own checkout has hooks/posttooluse_bash_chisel.py next to bin/ashlar.
+    result = run(["doctor"], home)
+    assert result.returncode == 0
+    assert "posttooluse_bash_chisel.py" in result.stdout
+    assert "PostToolUse" in result.stdout
+    snippet_start = result.stdout.index("{\n")
+    json.loads(result.stdout[snippet_start:])  # the emitted snippet must be valid JSON
+
+
+def test_doctor_handles_malformed_ledger_without_crashing(home):
+    ledger = home / ".ashlar"
+    ledger.mkdir(parents=True)
+    (ledger / "ledger.jsonl").write_text("not valid json{{{\n")
+
+    result = run(["doctor"], home)
+    assert result.returncode == 0
+    assert "0 entries," in result.stdout  # malformed line skipped, same as `report`
+
+
+def test_doctor_uses_singular_file_for_exactly_one_cache_entry(home, tmp_path):
+    src = tmp_path / "file.txt"
+    src.write_text("hello\n")
+    run(["gavel", "--key", "file.txt", "--file", str(src), "--record"], home)
+
+    result = run(["doctor"], home)
+    assert "1 file," in result.stdout
+    assert "1 files," not in result.stdout
+
+
+def test_doctor_without_hook_script_explains_standalone_limitation(home, tmp_path):
+    standalone_bin_dir = tmp_path / "standalone" / "bin"
+    standalone_bin_dir.mkdir(parents=True)
+    standalone_ashlar = standalone_bin_dir / "ashlar"
+    standalone_ashlar.write_text(ASHLAR.read_text())
+    standalone_ashlar.chmod(0o755)
+
+    result = subprocess.run(
+        [sys.executable, str(standalone_ashlar), "doctor"],
+        capture_output=True,
+        text=True,
+        env={"PATH": "/usr/bin:/bin", "HOME": str(home)},
+    )
+    assert result.returncode == 0
+    assert "not found alongside this binary" in result.stdout
+    assert "needs the" in result.stdout

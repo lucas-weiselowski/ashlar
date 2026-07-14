@@ -7,6 +7,7 @@ import difflib
 import hashlib
 import json
 import re
+import shutil
 import sys
 import time
 from pathlib import Path
@@ -439,6 +440,82 @@ def cmd_report(args, _parser):
         print(f"{display_label:<32}{len(group):>7}{before:>12,}{after:>12,}{saved:>12,}{pct:>5.0f}%")
 
 
+def _human_bytes(n):
+    size = float(n)
+    for unit in ("B", "KB", "MB", "GB"):
+        if size < 1024:
+            return f"{size:.0f}{unit}" if unit == "B" else f"{size:.1f}{unit}"
+        size /= 1024
+    return f"{size:.1f}TB"
+
+
+def _dir_stats(path):
+    if not path.exists():
+        return 0, 0
+    files = [f for f in path.glob("*.txt") if f.is_file()]
+    return len(files), sum(f.stat().st_size for f in files)
+
+
+def cmd_doctor(args, _parser):
+    """Report on ashlar's own installation and storage health. If a hook script
+    is found alongside this checkout, also emit the PostToolUse snippet needed
+    to wire transparent auto-compaction into .claude/settings.json by hand --
+    the adoption gap for anyone not using the Claude Code plugin installer."""
+    print(f"ashlar {__version__}")
+    print(f"  binary: {Path(__file__).resolve()}")
+    on_path = shutil.which("ashlar")
+    print(f"  on PATH: {on_path if on_path else 'no'}")
+
+    print()
+    print(f"Ledger: {LEDGER_PATH}")
+    if LEDGER_PATH.exists():
+        entries = _load_entries(None)
+        print(f"  {len(entries)} entries, {_human_bytes(LEDGER_PATH.stat().st_size)}")
+    else:
+        print("  not created yet -- run `ashlar record`, `gavel --record`, or `chisel --record`")
+
+    print()
+    for label, dir_path in (("Gavel cache", GAVEL_DIR), ("Chisel recovery copies", CHISEL_DIR)):
+        count, total_size = _dir_stats(dir_path)
+        print(f"{label}: {dir_path}")
+        file_word = "file" if count == 1 else "files"
+        print(f"  {count} {file_word}, {_human_bytes(total_size)}" if count else "  empty")
+
+    print()
+    hook_path = Path(__file__).resolve().parent.parent / "hooks" / "posttooluse_bash_chisel.py"
+    if hook_path.exists():
+        print(f"PostToolUse hook found: {hook_path}")
+        print("  Already active if installed via the Claude Code plugin (see install.sh).")
+        print("  To wire it manually into .claude/settings.json (or ~/.claude/settings.json)")
+        print("  instead, add:")
+        print(
+            json.dumps(
+                {
+                    "hooks": {
+                        "PostToolUse": [
+                            {
+                                "matcher": "Bash",
+                                "hooks": [
+                                    {
+                                        "type": "command",
+                                        "command": f'python3 "{hook_path}"',
+                                        "timeout": 8,
+                                    }
+                                ],
+                            }
+                        ]
+                    }
+                },
+                indent=2,
+            )
+        )
+    else:
+        print("PostToolUse hook: not found alongside this binary.")
+        print("  Transparent auto-compaction is a Claude Code plugin feature and needs the")
+        print("  full checkout (see README.md), not just this standalone CLI -- gavel/chisel/")
+        print("  record/report all still work fine on their own without it.")
+
+
 def main():
     parser = argparse.ArgumentParser(prog="ashlar")
     parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
@@ -517,6 +594,9 @@ def main():
         help="only include entries within e.g. 30m, 24h, 7d, 2w",
     )
     p_report.set_defaults(func=cmd_report)
+
+    p_doctor = sub.add_parser("doctor", help="report on ashlar's installation and storage health")
+    p_doctor.set_defaults(func=cmd_doctor)
 
     args = parser.parse_args()
     args.func(args, parser)
