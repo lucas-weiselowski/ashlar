@@ -58,8 +58,23 @@ LOAD_BEARING_RE = re.compile(
 # bound the directory instead of growing it forever.
 CHISEL_RECOVERY_MAX_FILES = 200
 
+# Matches ANSI SGR/cursor escape sequences (colorized CI/terminal output). Pure
+# noise for a text-reading model, and defeats exact-match line dedup when only
+# the color codes differ between otherwise-identical lines.
+ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-9;]*[a-zA-Z]")
+
+# Volatile substrings (timestamps, epoch millis, UUIDs) that make otherwise-
+# identical log lines fail exact-match dedup. Used only by --normalize-repeats.
+VOLATILE_TOKEN_RE = re.compile(
+    r"\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:?\d{2})?"
+    r"|\b[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\b"
+    r"|\b\d{10,13}\b"
+)
+
 
 def parse_duration(s):
+    if not s:
+        raise argparse.ArgumentTypeError(f"invalid duration {s!r}, expected e.g. 30m, 24h, 7d, 2w")
     unit = s[-1]
     if unit not in DURATION_UNITS or not s[:-1].isdigit():
         raise argparse.ArgumentTypeError(f"invalid duration {s!r}, expected e.g. 30m, 24h, 7d, 2w")
@@ -82,6 +97,20 @@ def parse_keep_pattern(s):
         raise argparse.ArgumentTypeError(f"invalid --keep-pattern regex {s!r}: {e}") from e
 
 
+def positive_int(s):
+    v = int(s)
+    if v <= 0:
+        raise argparse.ArgumentTypeError(f"must be a positive integer, got {s!r}")
+    return v
+
+
+def non_negative_int(s):
+    v = int(s)
+    if v < 0:
+        raise argparse.ArgumentTypeError(f"must be a non-negative integer, got {s!r}")
+    return v
+
+
 @contextlib.contextmanager
 def _locked(lock_path):
     """Serialize a read-modify-write critical section across concurrent ashlar
@@ -100,8 +129,17 @@ def _locked(lock_path):
                 fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
 
 
+def _read_stdin():
+    # Tool output isn't guaranteed valid UTF-8 (truncated multibyte char from a
+    # killed process, stray binary) -- replace rather than crash the whole run.
+    sys.stdin.reconfigure(errors="replace")
+    return sys.stdin.read()
+
+
 def _read_text(path):
-    return sys.stdin.read() if path == "-" else Path(path).read_text()
+    if path is None or path == "-":
+        return _read_stdin()
+    return Path(path).read_text(errors="replace")
 
 
 def _estimate_tokens(text):
@@ -181,8 +219,9 @@ def _prune_gavel_cache(max_age_seconds):
 
 def cmd_gavel(args, _parser):
     """Dedup repeated tool output: diff new content against the last-seen version for --key."""
-    text = _read_text(args.file) if args.file else sys.stdin.read()
-    before_tokens = _estimate_tokens(text)
+    raw_text = _read_text(args.file)
+    before_tokens = _estimate_tokens(raw_text)
+    text = ANSI_ESCAPE_RE.sub("", raw_text)
 
     GAVEL_DIR.mkdir(parents=True, exist_ok=True)
     cache_path = _gavel_cache_path(args.key)
@@ -193,11 +232,11 @@ def cmd_gavel(args, _parser):
         if not cache_path.exists():
             note = "first read of this key, cached in full"
             output = text
-        elif cache_path.read_text() == text:
+        elif cache_path.read_text(errors="replace") == text:
             note = "identical to cached version"
             output = f"<unchanged since last read: {args.key}>\n"
         else:
-            old = cache_path.read_text()
+            old = cache_path.read_text(errors="replace")
             diff = "".join(
                 difflib.unified_diff(
                     old.splitlines(keepends=True),
@@ -224,17 +263,42 @@ def cmd_gavel(args, _parser):
         _append_ledger(before_tokens, after_tokens, args.label or f"gavel:{args.key}")
 
 
-def _collapse_repeats(lines):
+def _normalize_volatile(line):
+    return VOLATILE_TOKEN_RE.sub("<t>", line)
+
+
+def _collapse_repeats(lines, normalize=False):
+    key = _normalize_volatile if normalize else (lambda line: line)
     collapsed = []
     i, n = 0, len(lines)
     while i < n:
         j = i + 1
-        while j < n and lines[j] == lines[i]:
+        while j < n and key(lines[j]) == key(lines[i]):
             j += 1
         count = j - i
         collapsed.append(lines[i] if count == 1 else f"{lines[i]}  (×{count})")
         i = j
     return collapsed
+
+
+def _truncate_long_lines(lines, max_chars):
+    """A single oversized line (minified JSON, a base64 blob, one huge API
+    response with no newlines) sails straight through line-based collapsing
+    and --max-lines truncation untouched -- neither operates below the line
+    granularity. Cap each line individually, head/tail, same convention as
+    the whole-document elision below."""
+    truncated = False
+    out = []
+    for line in lines:
+        if len(line) <= max_chars:
+            out.append(line)
+            continue
+        head = max_chars // 2
+        tail = max_chars - head
+        elided = len(line) - head - tail
+        out.append(f"{line[:head]} ...{elided} chars elided... {line[-tail:]}")
+        truncated = True
+    return out, truncated
 
 
 def _select_load_bearing(lines, context, extra_patterns=None):
@@ -271,14 +335,22 @@ def _save_full_text(text):
 
 def cmd_chisel(args, _parser):
     """Reduce verbose text (logs, stack traces, search dumps) to its load-bearing lines."""
-    text = _read_text(args.file) if args.file else sys.stdin.read()
-    before_tokens = _estimate_tokens(text)
+    raw_text = _read_text(args.file)
+    before_tokens = _estimate_tokens(raw_text)
+    text = ANSI_ESCAPE_RE.sub("", raw_text)
     raw_lines = text.splitlines()
 
-    lines = _collapse_repeats(raw_lines)
+    # Keyword matching runs on full, untruncated lines -- an oversized line (the
+    # exact case --max-line-chars targets) can carry its load-bearing word past
+    # where head/tail truncation would otherwise cut it, dropping the signal
+    # before it's ever seen. Truncate only for display, after selection.
+    lines = _collapse_repeats(raw_lines, normalize=args.normalize_repeats)
     keep = _select_load_bearing(lines, args.context, args.keep_pattern)
     selected = [lines[i] for i in sorted(keep)] if keep else lines
     dropped = bool(keep) and len(selected) < len(lines)
+
+    selected, lines_truncated = _truncate_long_lines(selected, args.max_line_chars)
+    dropped = dropped or lines_truncated
 
     if len(selected) > args.max_lines:
         head = args.max_lines // 2
@@ -290,7 +362,7 @@ def cmd_chisel(args, _parser):
     output = "\n".join(selected) + ("\n" if selected else "")
 
     if dropped:
-        full_path = _save_full_text(text)
+        full_path = _save_full_text(raw_text)
         output += f"⟨ashlar: {len(raw_lines)}→{len(selected)} lines kept, full original at {full_path}⟩\n"
 
     sys.stdout.write(output)
@@ -317,7 +389,14 @@ def _load_entries(since_seconds):
             line = line.strip()
             if not line:
                 continue
-            entry = json.loads(line)
+            try:
+                entry = json.loads(line)
+            except json.JSONDecodeError:
+                # A line torn by a concurrent writer or a killed process
+                # shouldn't take down every future `report` -- skip it, not crash.
+                continue
+            if not all(k in entry for k in ("ts", "before", "after")):
+                continue
             if cutoff is not None and entry["ts"] < cutoff:
                 continue
             entries.append(entry)
@@ -347,7 +426,7 @@ def cmd_report(args, _parser):
 
     by_label = {}
     for e in entries:
-        by_label.setdefault(e["label"] or "(no label)", []).append(e)
+        by_label.setdefault(e.get("label") or "(no label)", []).append(e)
 
     header = f"{'Label':<32}{'Count':>7}{'Rough':>12}{'Perfect':>12}{'Saved':>12}{'%':>6}"
     print(header)
@@ -396,8 +475,24 @@ def main():
 
     p_chisel = sub.add_parser("chisel", help="reduce verbose text to its load-bearing lines")
     p_chisel.add_argument("--file", default=None, help="path to read from; defaults to stdin")
-    p_chisel.add_argument("--max-lines", type=int, default=200, help="output cap; head/tail kept, middle elided")
-    p_chisel.add_argument("--context", type=int, default=2, help="lines of context kept around each match")
+    p_chisel.add_argument(
+        "--max-lines", type=positive_int, default=200, help="output cap; head/tail kept, middle elided"
+    )
+    p_chisel.add_argument(
+        "--context", type=non_negative_int, default=2, help="lines of context kept around each match"
+    )
+    p_chisel.add_argument(
+        "--max-line-chars",
+        type=positive_int,
+        default=2000,
+        help="cap a single line's length (head/tail kept, middle elided) -- catches oversized lines "
+        "line-based collapsing/truncation can't touch, e.g. minified JSON or a base64 blob",
+    )
+    p_chisel.add_argument(
+        "--normalize-repeats",
+        action="store_true",
+        help="collapse consecutive lines that differ only by timestamp/UUID/epoch, not just byte-identical ones",
+    )
     p_chisel.add_argument(
         "--keep-pattern",
         type=parse_keep_pattern,

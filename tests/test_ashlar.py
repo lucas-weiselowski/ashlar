@@ -334,6 +334,20 @@ def test_chisel_elision_keeps_full_original_recoverable(home, tmp_path):
     assert "Signature mismatch: build halted (code 77)" in Path(full_path).read_text()
 
 
+def test_chisel_recovery_copy_preserves_raw_ansi_codes(home, tmp_path):
+    # Regression: the recovery copy is meant to be the actual original output
+    # (secret-adjacent, written 0600) -- it must not silently be the
+    # ANSI-stripped version chisel used internally for matching/display.
+    lines = [f"\x1b[90mdebug noise {i}\x1b[0m" for i in range(500)]
+    lines[250] = "\x1b[31mSignature mismatch: build halted (code 77)\x1b[0m"
+    src = tmp_path / "dump.txt"
+    src.write_bytes("\n".join(lines).encode())
+
+    result = run(["chisel", "--file", str(src), "--max-lines", "20"], home)
+    full_path = _extract_recovery_path(result.stdout)
+    assert "\x1b[" in Path(full_path).read_text()
+
+
 def test_chisel_keyword_filter_alone_stays_recoverable(home, tmp_path):
     # Regression: recovery previously only triggered on --max-lines elision, so a
     # small input that never reaches elision but still gets keyword-filtered
@@ -473,3 +487,110 @@ def test_chisel_keep_pattern_invalid_regex_errors_cleanly(home, tmp_path):
     result = run(["chisel", "--file", str(src), "--keep-pattern", "("], home)
     assert result.returncode != 0
     assert "invalid --keep-pattern regex" in result.stderr
+
+
+def test_chisel_strips_ansi_escape_codes(home, tmp_path):
+    src = tmp_path / "log.txt"
+    src.write_bytes(b"\x1b[31mERROR\x1b[0m: something broke\n")
+
+    result = run(["chisel", "--file", str(src)], home)
+    assert "\x1b[" not in result.stdout
+    assert "ERROR: something broke" in result.stdout
+
+
+def test_chisel_ansi_stripping_lets_colorized_repeats_dedup(home, tmp_path):
+    lines = ["\x1b[32msame line\x1b[0m" for _ in range(5)]
+    src = tmp_path / "log.txt"
+    src.write_bytes("\n".join(lines).encode())
+
+    result = run(["chisel", "--file", str(src)], home)
+    assert "(×5)" in result.stdout
+
+
+def test_gavel_ansi_stripping_lets_colorized_output_dedup(home, tmp_path):
+    src = tmp_path / "file.py"
+    src.write_bytes(b"\x1b[32mline1\x1b[0m\nline2\n")
+    run(["gavel", "--key", "file.py", "--file", str(src)], home)
+
+    result = run(["gavel", "--key", "file.py", "--file", str(src)], home)
+    assert "<unchanged since last read: file.py>" in result.stdout
+
+
+def test_chisel_normalize_repeats_collapses_timestamped_lines(home, tmp_path):
+    lines = [f"2026-07-14T12:00:{i:02d}Z heartbeat ok" for i in range(10)]
+    src = tmp_path / "log.txt"
+    src.write_text("\n".join(lines))
+
+    result = run(["chisel", "--file", str(src), "--normalize-repeats"], home)
+    assert "(×10)" in result.stdout
+
+
+def test_chisel_without_normalize_repeats_keeps_timestamped_lines_distinct(home, tmp_path):
+    lines = [f"2026-07-14T12:00:{i:02d}Z heartbeat ok" for i in range(10)]
+    src = tmp_path / "log.txt"
+    src.write_text("\n".join(lines))
+
+    result = run(["chisel", "--file", str(src)], home)
+    assert "(×10)" not in result.stdout
+
+
+def test_chisel_max_line_chars_truncates_oversized_single_line(home, tmp_path):
+    huge_line = "x" * 5000
+    src = tmp_path / "log.txt"
+    src.write_text(huge_line + "\n")
+
+    result = run(["chisel", "--file", str(src), "--max-line-chars", "100"], home)
+    assert "chars elided" in result.stdout
+    assert len(result.stdout.splitlines()[0]) < 5000
+
+
+def test_chisel_max_line_chars_keeps_keyword_past_truncation_point(home, tmp_path):
+    huge_line = "x" * 3000 + " ValueError: boom"
+    src = tmp_path / "log.txt"
+    src.write_text(huge_line + "\n")
+
+    result = run(["chisel", "--file", str(src), "--max-line-chars", "100"], home)
+    assert "ValueError: boom" in result.stdout
+
+
+def test_chisel_max_line_chars_default_leaves_normal_lines_untouched(home, tmp_path):
+    src = tmp_path / "log.txt"
+    src.write_text("a normal short line\n")
+
+    result = run(["chisel", "--file", str(src)], home)
+    assert result.stdout == "a normal short line\n"
+
+
+def test_gavel_handles_non_utf8_input_without_crashing(home, tmp_path):
+    src = tmp_path / "binary.dat"
+    src.write_bytes(b"line one\n\xff\xfe garbage \nline two\n")
+
+    result = run(["gavel", "--key", "binary.dat", "--file", str(src)], home)
+    assert result.returncode == 0
+
+
+def test_chisel_handles_non_utf8_input_without_crashing(home, tmp_path):
+    src = tmp_path / "binary.dat"
+    src.write_bytes(b"ERROR: \xff\xfe broke\n")
+
+    result = run(["chisel", "--file", str(src)], home)
+    assert result.returncode == 0
+    assert "ERROR" in result.stdout
+
+
+def test_report_skips_malformed_ledger_lines(home):
+    run(["record", "--before", "1000", "--after", "500", "--label", "good"], home)
+
+    ledger = home / ".ashlar" / "ledger.jsonl"
+    with ledger.open("a") as f:
+        f.write("not valid json\n")
+        f.write('{"ts": 123}\n')  # missing before/after
+
+    result = run(["report"], home)
+    assert "1,000 tokens" in result.stdout
+
+
+def test_parse_duration_rejects_empty_string(home):
+    result = run(["report", "--since", ""], home)
+    assert result.returncode != 0
+    assert "invalid duration" in result.stderr
