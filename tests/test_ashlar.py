@@ -1,9 +1,12 @@
 """End-to-end tests: invoke bin/ashlar as a subprocess, same as a real user would."""
 
+import importlib.machinery
+import importlib.util
 import json
 import os
 import subprocess
 import sys
+import threading
 import time
 from pathlib import Path
 
@@ -191,6 +194,43 @@ def test_gavel_record_flag_writes_ledger(home, tmp_path):
     assert ledger.exists()
     entry = json.loads(ledger.read_text().splitlines()[0])
     assert entry["label"] == "gavel:file.py"
+
+
+def _load_ashlar_module():
+    # bin/ashlar is a script, not a package — exec it as a module to unit-test
+    # _locked() directly. A black-box subprocess race (many concurrent `record`
+    # calls) doesn't reliably reproduce: process-spawn overhead dwarfs the
+    # actual read-modify-write window, so it passes whether or not the lock
+    # exists (verified: 60 concurrent calls, 3 trials, zero corruption even
+    # with the lock removed). Only a deterministic in-process test has teeth.
+    loader = importlib.machinery.SourceFileLoader("ashlar_under_test", str(ASHLAR))
+    spec = importlib.util.spec_from_loader(loader.name, loader)
+    module = importlib.util.module_from_spec(spec)
+    loader.exec_module(module)
+    return module
+
+
+def test_locked_serializes_concurrent_critical_sections(tmp_path):
+    ashlar = _load_ashlar_module()
+    lock_path = tmp_path / "test.lock"
+    holder = threading.Event()
+    violations = []
+
+    def worker():
+        with ashlar._locked(lock_path):
+            if holder.is_set():
+                violations.append(True)
+            holder.set()
+            time.sleep(0.02)
+            holder.clear()
+
+    threads = [threading.Thread(target=worker) for _ in range(10)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(timeout=5)
+
+    assert not violations
 
 
 def test_gavel_prunes_stale_cache_entries(home, tmp_path):
