@@ -96,6 +96,10 @@ $ cat some/file.py | ashlar gavel --key some/file.py
 # Trim a verbose log/stack trace/grep dump down to its load-bearing lines:
 $ some_noisy_command 2>&1 | ashlar chisel --max-lines 80
 
+# The built-in error/warning/etc. keyword list is fixed and English-only;
+# OR in extra terms it misses (repeatable, on top of the built-in list):
+$ ashlar chisel --file build.log --keep-pattern segfault --keep-pattern 'oom-killer'
+
 # Either one can log its own savings straight to the ledger:
 $ ashlar chisel --file build.log --record --label "CI build log"
 ```

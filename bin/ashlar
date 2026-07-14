@@ -54,6 +54,15 @@ def parse_age_or_zero(s):
     return parse_duration(s)
 
 
+def parse_keep_pattern(s):
+    """--keep-pattern's argparse type=: compile eagerly so a bad regex fails
+    with a clear CLI error instead of a traceback mid-chisel."""
+    try:
+        return re.compile(s, re.IGNORECASE)
+    except re.error as e:
+        raise argparse.ArgumentTypeError(f"invalid --keep-pattern regex {s!r}: {e}") from e
+
+
 def _read_text(path):
     return sys.stdin.read() if path == "-" else Path(path).read_text()
 
@@ -188,10 +197,13 @@ def _collapse_repeats(lines):
     return collapsed
 
 
-def _select_load_bearing(lines, context):
+def _select_load_bearing(lines, context, extra_patterns=None):
     keep = set()
     for i, line in enumerate(lines):
-        if LOAD_BEARING_RE.search(line):
+        is_load_bearing = LOAD_BEARING_RE.search(line) or (
+            extra_patterns and any(p.search(line) for p in extra_patterns)
+        )
+        if is_load_bearing:
             keep.update(range(max(0, i - context), min(len(lines), i + context + 1)))
     return keep
 
@@ -203,7 +215,7 @@ def cmd_chisel(args, _parser):
     raw_lines = text.splitlines()
 
     lines = _collapse_repeats(raw_lines)
-    keep = _select_load_bearing(lines, args.context)
+    keep = _select_load_bearing(lines, args.context, args.keep_pattern)
     selected = [lines[i] for i in sorted(keep)] if keep else lines
 
     if len(selected) > args.max_lines:
@@ -318,6 +330,16 @@ def main():
     p_chisel.add_argument("--file", default=None, help="path to read from; defaults to stdin")
     p_chisel.add_argument("--max-lines", type=int, default=200, help="output cap; head/tail kept, middle elided")
     p_chisel.add_argument("--context", type=int, default=2, help="lines of context kept around each match")
+    p_chisel.add_argument(
+        "--keep-pattern",
+        type=parse_keep_pattern,
+        action="append",
+        default=None,
+        metavar="REGEX",
+        help="extra regex to OR into the load-bearing check, on top of (not replacing) the built-in "
+        "keyword list; repeatable. Matched case-insensitively. Use for terms the built-in list misses "
+        "(e.g. 'segfault', a non-English error word, a framework-specific error code)",
+    )
     p_chisel.add_argument("--record", action="store_true", help="log before/after token counts to the ledger")
     p_chisel.add_argument("--label", type=str, default=None)
     p_chisel.set_defaults(func=cmd_chisel)

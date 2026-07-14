@@ -56,6 +56,16 @@ some_command_that_dumps_a_huge_log 2>&1 | ashlar chisel --max-lines 80
 Tune `--context` up if a matched error needs more surrounding lines to be
 useful; tune `--max-lines` down for a harder cap on genuinely huge dumps.
 
+The built-in keyword list is a fixed, English-only set — it can both miss
+real failures worded differently (`segfault`, non-English error text,
+framework-specific codes) and keep prose that merely mentions one of the
+words. Pass `--keep-pattern REGEX` (repeatable) to OR extra terms into the
+check without losing the built-in list:
+
+```
+ashlar chisel --file build.log --keep-pattern segfault --keep-pattern 'oom-killer'
+```
+
 ## record/report — track savings
 
 Both `gavel` and `chisel` accept `--record [--label X]` to log their
