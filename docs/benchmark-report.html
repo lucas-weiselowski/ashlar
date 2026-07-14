@@ -1,0 +1,427 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Ashlar Token-Compaction Benchmark</title>
+<style>
+  :root {
+    --bg: #eef0ed;
+    --surface: #f8f9f6;
+    --surface-2: #eef1ec;
+    --ink: #1c201d;
+    --ink-muted: #565f58;
+    --border: #d3d8d1;
+    --accent: #3f6656;
+    --accent-ink: #2b4a3d;
+    --accent-soft: rgba(63, 102, 86, 0.11);
+    --negative: #a6432e;
+    --negative-soft: rgba(166, 67, 46, 0.11);
+    --shadow: 0 1px 2px rgba(28, 32, 29, 0.06);
+  }
+  :root[data-theme="dark"] {
+    --bg: #141716;
+    --surface: #1a1e1c;
+    --surface-2: #202422;
+    --ink: #e6e9e4;
+    --ink-muted: #9aa39a;
+    --border: #2e3431;
+    --accent: #74ad92;
+    --accent-ink: #9bc9b3;
+    --accent-soft: rgba(116, 173, 146, 0.14);
+    --negative: #e0715a;
+    --negative-soft: rgba(224, 113, 90, 0.14);
+    --shadow: 0 1px 2px rgba(0, 0, 0, 0.3);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #141716;
+      --surface: #1a1e1c;
+      --surface-2: #202422;
+      --ink: #e6e9e4;
+      --ink-muted: #9aa39a;
+      --border: #2e3431;
+      --accent: #74ad92;
+      --accent-ink: #9bc9b3;
+      --accent-soft: rgba(116, 173, 146, 0.14);
+      --negative: #e0715a;
+      --negative-soft: rgba(224, 113, 90, 0.14);
+      --shadow: 0 1px 2px rgba(0, 0, 0, 0.3);
+    }
+  }
+
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--ink);
+    font-family: -apple-system, "Segoe UI", Inter, system-ui, sans-serif;
+    line-height: 1.55;
+    -webkit-font-smoothing: antialiased;
+  }
+  ::selection { background: var(--accent-soft); }
+
+  .page {
+    max-width: 760px;
+    margin: 0 auto;
+    padding: 3.5rem 1.5rem 5rem;
+  }
+
+  h1, h2, h3 {
+    font-family: "Iowan Old Style", "Palatino Linotype", Palatino, Georgia, serif;
+    font-weight: 600;
+    letter-spacing: -0.01em;
+    text-wrap: balance;
+    color: var(--ink);
+  }
+
+  header.masthead {
+    display: flex;
+    flex-direction: column;
+    gap: 0.6rem;
+    padding-bottom: 1.75rem;
+    border-bottom: 1px solid var(--border);
+    margin-bottom: 2.25rem;
+  }
+  .eyebrow {
+    font-family: ui-monospace, "SF Mono", Menlo, monospace;
+    font-size: 0.72rem;
+    letter-spacing: 0.09em;
+    text-transform: uppercase;
+    color: var(--accent-ink);
+  }
+  h1.title {
+    font-size: 2.05rem;
+    margin: 0;
+    line-height: 1.15;
+  }
+  .dek {
+    font-size: 1.02rem;
+    color: var(--ink-muted);
+    max-width: 60ch;
+    margin: 0;
+  }
+  .meta-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.35rem 1.1rem;
+    font-family: ui-monospace, "SF Mono", Menlo, monospace;
+    font-size: 0.78rem;
+    color: var(--ink-muted);
+    margin-top: 0.4rem;
+  }
+  .meta-row b { color: var(--ink); font-weight: 600; }
+
+  section { margin-bottom: 2.5rem; }
+  h2.section-title {
+    font-size: 1.3rem;
+    margin: 0 0 1rem;
+  }
+  p { margin: 0 0 0.9rem; }
+  p:last-child { margin-bottom: 0; }
+
+  /* Executive summary tiles */
+  .stat-grid {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 0.7rem;
+    margin-bottom: 1.1rem;
+  }
+  .stat-tile {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 0.85rem 0.9rem;
+    box-shadow: var(--shadow);
+  }
+  .stat-tile .num {
+    font-family: ui-monospace, "SF Mono", Menlo, monospace;
+    font-variant-numeric: tabular-nums;
+    font-size: 1.5rem;
+    font-weight: 600;
+    color: var(--accent-ink);
+    line-height: 1.1;
+  }
+  .stat-tile .label {
+    font-size: 0.72rem;
+    color: var(--ink-muted);
+    margin-top: 0.3rem;
+    letter-spacing: 0.02em;
+  }
+
+  .callout {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-left: 3px solid var(--accent);
+    border-radius: 4px;
+    padding: 0.9rem 1.05rem;
+    font-size: 0.93rem;
+    color: var(--ink);
+  }
+  .callout.warn { border-left-color: var(--negative); }
+  .callout + .callout { margin-top: 0.65rem; }
+  .callout .k { font-weight: 600; }
+  .callout code {
+    font-family: ui-monospace, "SF Mono", Menlo, monospace;
+    background: var(--surface-2);
+    padding: 0.05rem 0.32rem;
+    border-radius: 3px;
+    font-size: 0.87em;
+  }
+
+  /* Results table */
+  .table-wrap { overflow-x: auto; border: 1px solid var(--border); border-radius: 6px; }
+  table {
+    border-collapse: collapse;
+    width: 100%;
+    min-width: 620px;
+    font-size: 0.87rem;
+    background: var(--surface);
+  }
+  thead th {
+    text-align: left;
+    font-size: 0.68rem;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--ink-muted);
+    font-weight: 600;
+    padding: 0.65rem 0.8rem;
+    border-bottom: 1px solid var(--border);
+    white-space: nowrap;
+  }
+  tbody td {
+    padding: 0.6rem 0.8rem;
+    border-bottom: 1px solid var(--border);
+    vertical-align: middle;
+    white-space: nowrap;
+  }
+  tbody tr:last-child td { border-bottom: none; }
+  tbody tr.subtotal td {
+    background: var(--surface-2);
+    font-weight: 600;
+    border-top: 1px solid var(--border);
+  }
+  td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; font-family: ui-monospace, "SF Mono", Menlo, monospace; }
+  td.scenario { white-space: normal; max-width: 15rem; }
+  td.scenario .tool-tag {
+    display: inline-block;
+    font-family: ui-monospace, "SF Mono", Menlo, monospace;
+    font-size: 0.66rem;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    padding: 0.08rem 0.36rem;
+    border-radius: 3px;
+    background: var(--accent-soft);
+    color: var(--accent-ink);
+    margin-right: 0.4rem;
+  }
+  .pct-cell { display: flex; align-items: center; gap: 0.5rem; justify-content: flex-end; }
+  .pct-value { min-width: 3.4rem; text-align: right; }
+  .pct-value.neg { color: var(--negative); }
+  .pct-value.pos { color: var(--accent-ink); }
+  .meter {
+    width: 64px;
+    height: 6px;
+    border-radius: 3px;
+    background: var(--surface-2);
+    overflow: hidden;
+    position: relative;
+    flex-shrink: 0;
+  }
+  .meter .fill { position: absolute; top: 0; bottom: 0; background: var(--accent); border-radius: 3px; }
+  .meter .fill.neg { background: var(--negative); }
+
+  .two-col {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 0.7rem;
+  }
+
+  ul.rec-list { margin: 0; padding-left: 1.15rem; }
+  ul.rec-list li { margin-bottom: 0.55rem; }
+  ul.rec-list li:last-child { margin-bottom: 0; }
+
+  code.block {
+    display: block;
+    font-family: ui-monospace, "SF Mono", Menlo, monospace;
+    font-size: 0.8rem;
+    background: var(--surface-2);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 0.85rem 1rem;
+    white-space: pre-wrap;
+    word-break: break-word;
+    color: var(--ink);
+    overflow-x: auto;
+  }
+
+  footer {
+    margin-top: 3rem;
+    padding-top: 1.25rem;
+    border-top: 1px solid var(--border);
+    font-size: 0.78rem;
+    color: var(--ink-muted);
+  }
+
+  @media (max-width: 620px) {
+    .stat-grid { grid-template-columns: repeat(2, 1fr); }
+    .two-col { grid-template-columns: 1fr; }
+  }
+</style>
+</head>
+<body>
+
+<div class="page">
+
+  <header class="masthead">
+    <div class="eyebrow">Benchmark Report · Ashlar v0.2.0</div>
+    <h1 class="title">Token-Compaction Benchmark: Gavel &amp; Chisel</h1>
+    <p class="dek">Six controlled scenarios measuring how much input-token volume <code style="font-family: ui-monospace, monospace; background: var(--surface-2); padding: 0.05rem 0.32rem; border-radius: 3px;">gavel</code> and <code style="font-family: ui-monospace, monospace; background: var(--surface-2); padding: 0.05rem 0.32rem; border-radius: 3px;">chisel</code> remove before content reaches the model, plus the failure modes found along the way.</p>
+    <div class="meta-row">
+      <span><b>Date</b> 2026-07-14</span>
+      <span><b>Repo</b> ashlar @ main</span>
+      <span><b>Method</b> local CLI runs, logged to ledger</span>
+    </div>
+  </header>
+
+  <section>
+    <h2 class="section-title">Executive summary</h2>
+    <div class="stat-grid">
+      <div class="stat-tile">
+        <div class="num">84.4%</div>
+        <div class="label">Weighted avg. cut<br>(all tokens pooled)</div>
+      </div>
+      <div class="stat-tile">
+        <div class="num">79.5%</div>
+        <div class="label">Simple avg. cut<br>(mean of 6 scenarios)</div>
+      </div>
+      <div class="stat-tile">
+        <div class="num">97.1%</div>
+        <div class="label">Chisel weighted avg.<br>(3 scenarios)</div>
+      </div>
+      <div class="stat-tile">
+        <div class="num">50.9%</div>
+        <div class="label">Gavel weighted avg.<br>(3 scenarios)</div>
+      </div>
+    </div>
+    <p><b>Chisel is the reliable cut</b> — 94.6–99.3% across a verbose test run, a large grep dump, and a build log with an embedded stack trace. <b>Gavel is bimodal</b> — near-total savings (98.7–99.6%) when a re-read is unchanged or lightly edited, but a net <em>loss</em> (&minus;12.5%) when the re-read is a near-total rewrite, because a unified diff of two mostly-different files is larger than either file alone. Pooled across everything tested, <b>1 in every ~6.3 input tokens survives compaction</b> — roughly 84% is removed before it would otherwise reach the model.</p>
+  </section>
+
+  <section>
+    <h2 class="section-title">Method</h2>
+    <p>Each scenario feeds real or representative content through <code style="font-family: ui-monospace, monospace; background: var(--surface-2); padding: 0.05rem 0.32rem; border-radius: 3px;">gavel</code>/<code style="font-family: ui-monospace, monospace; background: var(--surface-2); padding: 0.05rem 0.32rem; border-radius: 3px;">chisel</code> at default settings (<code style="font-family: ui-monospace, monospace; background: var(--surface-2); padding: 0.05rem 0.32rem; border-radius: 3px;">--context 2</code>, and <code style="font-family: ui-monospace, monospace; background: var(--surface-2); padding: 0.05rem 0.32rem; border-radius: 3px;">--max-lines</code> set per scenario to match a realistic viewport), records before/after token counts to the ledger with <code style="font-family: ui-monospace, monospace; background: var(--surface-2); padding: 0.05rem 0.32rem; border-radius: 3px;">--record</code>, and reads the total back with <code style="font-family: ui-monospace, monospace; background: var(--surface-2); padding: 0.05rem 0.32rem; border-radius: 3px;">ashlar report --by-label</code>. Two scenarios use real content generated on this machine (the ashlar CLI's own source, this repo's pytest run); four use synthetic-but-representative content built to match a named, common agent tool-output pattern (grep dump, CI test run, build log with a traceback) — each is labeled as such in the table below.</p>
+    <div class="callout">
+      <span class="k">Heuristic, not a real tokenizer.</span> Ashlar estimates tokens as <code>chars / 4</code> — a stated approximation (<code>bin/ashlar:19-20</code>), not a model-specific tokenizer. Absolute counts here will drift from what a real Claude/GPT tokenizer reports; the <em>relative</em> cut percentages are the trustworthy number.
+    </div>
+  </section>
+
+  <section>
+    <h2 class="section-title">Results</h2>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Scenario</th>
+            <th class="num">Before</th>
+            <th class="num">After</th>
+            <th class="num">Saved</th>
+            <th class="num">Cut</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td class="scenario"><span class="tool-tag">gavel</span>Unchanged repeat read</td>
+            <td class="num">2,453</td>
+            <td class="num">9</td>
+            <td class="num">2,444</td>
+            <td class="num"><div class="pct-cell"><div class="meter"><div class="fill" style="right:0;width:99.6%"></div></div><span class="pct-value pos">99.6%</span></div></td>
+          </tr>
+          <tr>
+            <td class="scenario"><span class="tool-tag">gavel</span>Single-line edit repeat read</td>
+            <td class="num">2,456</td>
+            <td class="num">31</td>
+            <td class="num">2,425</td>
+            <td class="num"><div class="pct-cell"><div class="meter"><div class="fill" style="right:0;width:98.7%"></div></div><span class="pct-value pos">98.7%</span></div></td>
+          </tr>
+          <tr>
+            <td class="scenario"><span class="tool-tag">gavel</span>~50% file rewrite repeat read</td>
+            <td class="num">3,747</td>
+            <td class="num">4,214</td>
+            <td class="num">&minus;467</td>
+            <td class="num"><div class="pct-cell"><div class="meter"><div class="fill neg" style="right:0;width:12.5%"></div></div><span class="pct-value neg">&minus;12.5%</span></div></td>
+          </tr>
+          <tr>
+            <td class="scenario"><span class="tool-tag">chisel</span>Verbose test run (479 pass / 1 fail)</td>
+            <td class="num">5,807</td>
+            <td class="num">172</td>
+            <td class="num">5,635</td>
+            <td class="num"><div class="pct-cell"><div class="meter"><div class="fill" style="right:0;width:97%"></div></div><span class="pct-value pos">97.0%</span></div></td>
+          </tr>
+          <tr>
+            <td class="scenario"><span class="tool-tag">chisel</span>Large grep dump (750 matches)</td>
+            <td class="num">7,912</td>
+            <td class="num">426</td>
+            <td class="num">7,486</td>
+            <td class="num"><div class="pct-cell"><div class="meter"><div class="fill" style="right:0;width:94.6%"></div></div><span class="pct-value pos">94.6%</span></div></td>
+          </tr>
+          <tr>
+            <td class="scenario"><span class="tool-tag">chisel</span>Build log + Python traceback</td>
+            <td class="num">9,215</td>
+            <td class="num">61</td>
+            <td class="num">9,154</td>
+            <td class="num"><div class="pct-cell"><div class="meter"><div class="fill" style="right:0;width:99.3%"></div></div><span class="pct-value pos">99.3%</span></div></td>
+          </tr>
+          <tr class="subtotal">
+            <td class="scenario">All 6 — pooled</td>
+            <td class="num">31,590</td>
+            <td class="num">4,913</td>
+            <td class="num">26,677</td>
+            <td class="num" style="text-align:right">84.4%</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section>
+    <h2 class="section-title">Findings worth flagging</h2>
+    <div class="callout warn">
+      <span class="k">Gavel can cost tokens on heavy rewrites.</span> A unified diff of two versions that share little content is larger than either version alone — confirmed at &minus;12.5% on a ~50%-rewritten file. Gavel is a net win only when repeat reads are usually unchanged or lightly edited (the common case for re-reading a file mid-edit-loop), not when the same key is reused across unrelated content.
+    </div>
+    <div class="callout warn">
+      <span class="k">Chisel's keyword filter misses CamelCase exception names.</span> The load-bearing regex is <code>\berror\b</code> (word-boundary anchored) — it correctly matches "Traceback" and standalone "error," but <b>not</b> <code>ValueError</code>, <code>KeyError</code>, <code>TypeError</code>, or any <code>SomethingError</code> class name, because there's no word boundary between the preceding letter and "Error." In the build-log scenario, the traceback's header line survived (via the "Traceback" keyword) but the actual exception message — the part that says what broke — fell outside the default 2-line context window and was elided. Verified directly against <code>bin/ashlar:25-29</code>.
+    </div>
+    <div class="callout">
+      <span class="k">Keyword selection is exact, not semantic.</span> In the grep-dump scenario, a single comment flagging a real circular-dependency risk sat mid-list with no matching keyword and was dropped by head/tail truncation along with the surrounding noise. Chisel reduces to what looks like an error/warning; a load-bearing line that isn't phrased that way can still be cut.
+    </div>
+  </section>
+
+  <section>
+    <h2 class="section-title">Recommendations</h2>
+    <ul class="rec-list">
+      <li><b>Use gavel for keys you expect to be re-read mostly unchanged</b> — file watches, config re-checks, polling loops. Don't key gavel on content that gets substantially rewritten between reads; there the diff overhead exceeds the savings.</li>
+      <li><b>Widen the CamelCase gap before relying on chisel for uncaught-exception triage.</b> Extending <code>LOAD_BEARING_RE</code> to catch e.g. <code>\w*Error\b</code>/<code>\w*Exception\b</code> alongside the existing terms would keep the actual exception message in frame, not just the "Traceback" header.</li>
+      <li><b>Chisel is safe as a default filter for high-volume, low-signal output</b> (test runs, build logs, grep dumps) where the goal is finding a needle, not preserving every line — 94.6–99.3% cut held across three very different shapes of noisy output.</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2 class="section-title">Reproduce this</h2>
+    <p>All six runs are logged under <code style="font-family: ui-monospace, monospace; background: var(--surface-2); padding: 0.05rem 0.32rem; border-radius: 3px;">bench:*</code> labels in <code style="font-family: ui-monospace, monospace; background: var(--surface-2); padding: 0.05rem 0.32rem; border-radius: 3px;">~/.ashlar/ledger.jsonl</code>:</p>
+    <code class="block">$ ashlar report --by-label
+Label                             Count       Rough     Perfect       Saved     %
+bench:chisel-stacktrace-log           1       9,215          61       9,154   99%
+bench:chisel-grep-dump                1       7,912         426       7,486   95%
+bench:chisel-verbose-testrun          1       5,807         172       5,635   97%
+bench:gavel-unchanged-repeat          1       2,453           9       2,444  100%
+bench:gavel-small-diff                1       2,456          31       2,425   99%
+bench:gavel-large-diff                1       3,747       4,214        -467  -12%</code>
+  </section>
+
+  <footer>
+    Ashlar v0.2.0 · chars/4 token heuristic · six scenarios, single run each — a larger sample (n≥3 per scenario) would tighten the confidence interval on the weighted average.
+  </footer>
+
+</div>
+</body>
+</html>
