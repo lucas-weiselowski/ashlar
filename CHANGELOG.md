@@ -17,6 +17,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Version
 - `chisel`: `LOAD_BEARING_RE` now also matches CamelCase exception names (`ValueError`, `KeyError`, ...) — previously `\berror\b` required a word boundary that CamelCase names don't have, so the actual exception message in a traceback could get chiseled away while only the literal "Traceback" line survived. The added alternative is scoped case-sensitive so it only catches CamelCase, not lowercase substrings like "terror" (#5).
 - `gavel`: falls back to sending the full new content instead of a unified diff when the diff isn't actually smaller — near-total rewrites could previously produce a diff bigger than just the new text, defeating the point of the tool for that call (#10).
 - `report --by-label`: labels longer than 31 chars now get a visible `...` ellipsis instead of being silently cut off with no indication of truncation (#9).
+- `record`/`gavel`: the ledger's prune-then-append and the gavel cache's prune-then-read-modify-write are now each wrapped in an advisory `flock` (no-op on Windows) — this repo's own multi-agent workflow runs several `ashlar` invocations against the same `~/.ashlar/` concurrently, and the ledger prune step in particular does a full read + truncate + rewrite that was previously unguarded against a concurrent append (#11).
 
 ## [0.2.0] - 2026-07-14
 ### Added

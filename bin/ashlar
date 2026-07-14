@@ -2,6 +2,7 @@
 """Ashlar — context-compaction toolkit for AI agents: measure, dedup, and trim tool output."""
 
 import argparse
+import contextlib
 import difflib
 import hashlib
 import json
@@ -10,11 +11,18 @@ import sys
 import time
 from pathlib import Path
 
+try:
+    import fcntl
+except ImportError:  # Windows has no fcntl; locking becomes a no-op there
+    fcntl = None
+
 __version__ = "0.2.0"
 
 LEDGER_DIR = Path.home() / ".ashlar"
 LEDGER_PATH = LEDGER_DIR / "ledger.jsonl"
+LEDGER_LOCK_PATH = LEDGER_DIR / ".ledger.lock"
 GAVEL_DIR = LEDGER_DIR / "gavel"
+GAVEL_LOCK_PATH = LEDGER_DIR / ".gavel.lock"
 
 # Heuristic only — no real tokenizer here. ~4 chars/token, English-text average.
 CHARS_PER_TOKEN = 4
@@ -63,6 +71,24 @@ def parse_keep_pattern(s):
         raise argparse.ArgumentTypeError(f"invalid --keep-pattern regex {s!r}: {e}") from e
 
 
+@contextlib.contextmanager
+def _locked(lock_path):
+    """Serialize a read-modify-write critical section across concurrent ashlar
+    invocations (this repo's own workflow runs multiple agents against the
+    same ~/.ashlar/ at once). Advisory POSIX lock, held for the whole `with`
+    block; a no-op on Windows (no fcntl there — lower risk for a tool that's
+    typically run by a single agent per machine)."""
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    with lock_path.open("w") as lock_file:
+        if fcntl is not None:
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            if fcntl is not None:
+                fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+
+
 def _read_text(path):
     return sys.stdin.read() if path == "-" else Path(path).read_text()
 
@@ -97,10 +123,11 @@ def _prune_ledger(max_age_seconds):
 
 def _append_ledger(before, after, label, max_ledger_age=DEFAULT_MAX_LEDGER_AGE):
     LEDGER_DIR.mkdir(parents=True, exist_ok=True)
-    _prune_ledger(max_ledger_age)
     entry = {"ts": time.time(), "before": before, "after": after, "label": label or ""}
-    with LEDGER_PATH.open("a") as f:
-        f.write(json.dumps(entry) + "\n")
+    with _locked(LEDGER_LOCK_PATH):
+        _prune_ledger(max_ledger_age)
+        with LEDGER_PATH.open("a") as f:
+            f.write(json.dumps(entry) + "\n")
     return entry
 
 
@@ -147,32 +174,34 @@ def cmd_gavel(args, _parser):
     before_tokens = _estimate_tokens(text)
 
     GAVEL_DIR.mkdir(parents=True, exist_ok=True)
-    _prune_gavel_cache(args.max_cache_age)
     cache_path = _gavel_cache_path(args.key)
 
-    if not cache_path.exists():
-        note = "first read of this key, cached in full"
-        output = text
-    elif cache_path.read_text() == text:
-        note = "identical to cached version"
-        output = f"<unchanged since last read: {args.key}>\n"
-    else:
-        old = cache_path.read_text()
-        diff = "".join(
-            difflib.unified_diff(
-                old.splitlines(keepends=True),
-                text.splitlines(keepends=True),
-                fromfile=f"{args.key} (cached)",
-                tofile=f"{args.key} (new)",
-            )
-        )
-        if _estimate_tokens(diff) < before_tokens:
-            note = "diffed against cached version"
-            output = diff
-        else:
-            note = "near-total rewrite, diff wasn't smaller — sent full content"
+    with _locked(GAVEL_LOCK_PATH):
+        _prune_gavel_cache(args.max_cache_age)
+
+        if not cache_path.exists():
+            note = "first read of this key, cached in full"
             output = text
-    cache_path.write_text(text)
+        elif cache_path.read_text() == text:
+            note = "identical to cached version"
+            output = f"<unchanged since last read: {args.key}>\n"
+        else:
+            old = cache_path.read_text()
+            diff = "".join(
+                difflib.unified_diff(
+                    old.splitlines(keepends=True),
+                    text.splitlines(keepends=True),
+                    fromfile=f"{args.key} (cached)",
+                    tofile=f"{args.key} (new)",
+                )
+            )
+            if _estimate_tokens(diff) < before_tokens:
+                note = "diffed against cached version"
+                output = diff
+            else:
+                note = "near-total rewrite, diff wasn't smaller — sent full content"
+                output = text
+        cache_path.write_text(text)
 
     sys.stdout.write(output)
     after_tokens = _estimate_tokens(output)
