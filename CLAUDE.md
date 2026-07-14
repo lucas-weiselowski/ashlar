@@ -132,10 +132,11 @@ instead.
 | tag release | user asks explicitly | releasable set merged to main |
 | push tag | agent, immediately after tagging | always (triggers release.yml) |
 
-### Not yet enforced
-Branch protection (required status checks on `main`) isn't configured —
-this workflow is doc-level policy, not repo-enforced. Consider enabling
-it in GitHub settings if agents start bypassing the PR flow.
+### Enforced
+Branch protection on `main` requires `lint`, `test` (all 5 Python
+versions), `smoke`, and `CodeQL` to pass (strict mode: branch must be
+up to date) before a PR can merge — configured in GitHub repo settings,
+not a workflow file, so it isn't visible in `.github/workflows/`.
 
 ## Conventions specific to this repo
 
