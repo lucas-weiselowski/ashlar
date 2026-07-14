@@ -280,3 +280,83 @@ def test_chisel_record_flag_writes_ledger(home, tmp_path):
     ledger = home / ".ashlar" / "ledger.jsonl"
     entry = json.loads(ledger.read_text().splitlines()[0])
     assert entry["label"] == "ci-log"
+
+
+def test_chisel_default_behavior_unchanged_without_keep_pattern(home, tmp_path):
+    lines = [f"debug line {i}" for i in range(20)]
+    lines[10] = "ERROR: something broke"
+    src = tmp_path / "log.txt"
+    src.write_text("\n".join(lines))
+
+    result = run(["chisel", "--file", str(src), "--context", "0"], home)
+    assert "ERROR: something broke" in result.stdout
+    assert "debug line 0" not in result.stdout
+
+
+def test_chisel_drops_term_missing_from_builtin_keyword_list(home, tmp_path):
+    lines = [f"debug line {i}" for i in range(20)]
+    lines[5] = "ERROR: unrelated failure"  # gives the filter something to match,
+    lines[10] = "process died: segfault at 0xdeadbeef"  # so this line isn't kept by the "nothing matched" fallback
+    src = tmp_path / "log.txt"
+    src.write_text("\n".join(lines))
+
+    result = run(["chisel", "--file", str(src), "--context", "0"], home)
+    # "segfault" isn't in the built-in LOAD_BEARING_RE keyword list, so without
+    # --keep-pattern this line has nothing else to match and gets dropped.
+    assert "segfault" not in result.stdout
+
+
+def test_chisel_keep_pattern_adds_coverage_for_missed_term(home, tmp_path):
+    lines = [f"debug line {i}" for i in range(20)]
+    lines[10] = "process died: segfault at 0xdeadbeef"
+    src = tmp_path / "log.txt"
+    src.write_text("\n".join(lines))
+
+    result = run(["chisel", "--file", str(src), "--context", "0", "--keep-pattern", "segfault"], home)
+    assert "segfault at 0xdeadbeef" in result.stdout
+    assert "debug line 0" not in result.stdout
+
+
+def test_chisel_keep_pattern_is_additive_not_replacing_builtin_list(home, tmp_path):
+    lines = [f"debug line {i}" for i in range(20)]
+    lines[5] = "ERROR: something broke"
+    lines[10] = "process died: segfault at 0xdeadbeef"
+    src = tmp_path / "log.txt"
+    src.write_text("\n".join(lines))
+
+    result = run(["chisel", "--file", str(src), "--context", "0", "--keep-pattern", "segfault"], home)
+    # Both the built-in match and the custom pattern's match survive.
+    assert "ERROR: something broke" in result.stdout
+    assert "segfault at 0xdeadbeef" in result.stdout
+
+
+def test_chisel_keep_pattern_is_case_insensitive(home, tmp_path):
+    src = tmp_path / "log.txt"
+    src.write_text("debug line 0\nSEGFAULT in worker\ndebug line 2\n")
+
+    result = run(["chisel", "--file", str(src), "--context", "0", "--keep-pattern", "segfault"], home)
+    assert "SEGFAULT in worker" in result.stdout
+
+
+def test_chisel_keep_pattern_repeatable_flag(home, tmp_path):
+    lines = [f"debug line {i}" for i in range(20)]
+    lines[3] = "process died: segfault at 0xdeadbeef"
+    lines[15] = "kernel: oom-killer invoked"
+    src = tmp_path / "log.txt"
+    src.write_text("\n".join(lines))
+
+    result = run(
+        ["chisel", "--file", str(src), "--context", "0", "--keep-pattern", "segfault", "--keep-pattern", "oom-killer"],
+        home,
+    )
+    assert "segfault at 0xdeadbeef" in result.stdout
+    assert "oom-killer invoked" in result.stdout
+
+
+def test_chisel_keep_pattern_invalid_regex_errors_cleanly(home, tmp_path):
+    src = tmp_path / "log.txt"
+    src.write_text("debug line 0\n")
+
+    result = run(["chisel", "--file", str(src), "--keep-pattern", "("], home)
+    assert result.returncode != 0
+    assert "invalid --keep-pattern regex" in result.stderr
