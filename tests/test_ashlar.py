@@ -1,8 +1,10 @@
 """End-to-end tests: invoke bin/ashlar as a subprocess, same as a real user would."""
 
 import json
+import os
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -151,6 +153,41 @@ def test_gavel_record_flag_writes_ledger(home, tmp_path):
     assert ledger.exists()
     entry = json.loads(ledger.read_text().splitlines()[0])
     assert entry["label"] == "gavel:file.py"
+
+
+def test_gavel_prunes_stale_cache_entries(home, tmp_path):
+    stale_src = tmp_path / "stale.py"
+    stale_src.write_text("old\n")
+    run(["gavel", "--key", "stale.py", "--file", str(stale_src)], home)
+
+    cache_dir = home / ".ashlar" / "gavel"
+    stale_cache = next(cache_dir.glob("*.txt"))
+    old_mtime = time.time() - 40 * 86400  # older than the 30d default
+    os.utime(stale_cache, (old_mtime, old_mtime))
+
+    fresh_src = tmp_path / "fresh.py"
+    fresh_src.write_text("new\n")
+    run(["gavel", "--key", "fresh.py", "--file", str(fresh_src)], home)
+
+    assert not stale_cache.exists()
+    assert len(list(cache_dir.glob("*.txt"))) == 1
+
+
+def test_gavel_max_cache_age_zero_disables_pruning(home, tmp_path):
+    stale_src = tmp_path / "stale.py"
+    stale_src.write_text("old\n")
+    run(["gavel", "--key", "stale.py", "--file", str(stale_src)], home)
+
+    cache_dir = home / ".ashlar" / "gavel"
+    stale_cache = next(cache_dir.glob("*.txt"))
+    old_mtime = time.time() - 999 * 86400
+    os.utime(stale_cache, (old_mtime, old_mtime))
+
+    fresh_src = tmp_path / "fresh.py"
+    fresh_src.write_text("new\n")
+    run(["gavel", "--key", "fresh.py", "--file", str(fresh_src), "--max-cache-age", "0"], home)
+
+    assert stale_cache.exists()
 
 
 def test_chisel_collapses_repeated_lines(home, tmp_path):

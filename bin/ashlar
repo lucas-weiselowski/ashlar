@@ -42,6 +42,12 @@ def parse_duration(s):
     return int(s[:-1]) * DURATION_UNITS[unit]
 
 
+def parse_cache_age(s):
+    if s == "0":
+        return 0
+    return parse_duration(s)
+
+
 def _read_text(path):
     return sys.stdin.read() if path == "-" else Path(path).read_text()
 
@@ -87,12 +93,25 @@ def _gavel_cache_path(key):
     return GAVEL_DIR / f"{digest}.txt"
 
 
+def _prune_gavel_cache(max_age_seconds):
+    if not max_age_seconds or not GAVEL_DIR.exists():
+        return
+    cutoff = time.time() - max_age_seconds
+    for cached in GAVEL_DIR.glob("*.txt"):
+        try:
+            if cached.stat().st_mtime < cutoff:
+                cached.unlink()
+        except FileNotFoundError:
+            pass
+
+
 def cmd_gavel(args, _parser):
     """Dedup repeated tool output: diff new content against the last-seen version for --key."""
     text = _read_text(args.file) if args.file else sys.stdin.read()
     before_tokens = _estimate_tokens(text)
 
     GAVEL_DIR.mkdir(parents=True, exist_ok=True)
+    _prune_gavel_cache(args.max_cache_age)
     cache_path = _gavel_cache_path(args.key)
 
     if not cache_path.exists():
@@ -252,6 +271,13 @@ def main():
     p_gavel.add_argument("--file", default=None, help="path to read new content from; defaults to stdin")
     p_gavel.add_argument("--record", action="store_true", help="log before/after token counts to the ledger")
     p_gavel.add_argument("--label", type=str, default=None)
+    p_gavel.add_argument(
+        "--max-cache-age",
+        type=parse_cache_age,
+        default=30 * DURATION_UNITS["d"],
+        metavar="DURATION",
+        help="evict cache entries older than this, e.g. 30m, 24h, 7d, 2w (default 30d; 0 disables)",
+    )
     p_gavel.set_defaults(func=cmd_gavel)
 
     p_chisel = sub.add_parser("chisel", help="reduce verbose text to its load-bearing lines")
