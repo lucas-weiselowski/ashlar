@@ -12,11 +12,13 @@
 
 # Ashlar
 
-Ashlar hews the rough stone of raw agent context — sprawling tool output, repeated file reads, verbose logs — into a perfect ashlar: dense, load-bearing, fit for the builder's use.
+[![CI](https://github.com/lucas-weiselowski/ashlar/actions/workflows/ci.yml/badge.svg)](https://github.com/lucas-weiselowski/ashlar/actions/workflows/ci.yml)
 
-Every mason starts with a stone as it comes from the quarry: irregular, heavy, unfit for the wall. Before it can take its place in the temple, the Entered Apprentice is given three tools to work it — the 24-inch gauge, to measure; the common gavel, to knock off its superfluous corners; the chisel, to smooth what remains.
+**Ashlar is a context-compaction toolkit for AI coding agents.** When an agent calls a tool — reading a file, dumping a log, running a search — most of what comes back is noise: repeated reads of the same file, walls of stack trace, oversized search results. That noise still costs tokens even though the model never needed it. Ashlar's job is to cut it down to the part that actually matters before it reaches the model.
 
-An AI agent's context is quarried the same way. Every tool call — a file read, a log dump, a search result — comes back mostly waste, its useful mass buried in noise. Ashlar puts the apprentice's three tools to that block before it ever reaches the model.
+All three working tools exist now (see [Status](#status)): `record`/`report` to measure, `gavel` to dedup repeated reads, `chisel` to trim verbose output to its load-bearing lines. A [Claude Code skill](skill/ashlar/SKILL.md) wraps `gavel`/`chisel` with usage guidance so any agent harness knows when to reach for them.
+
+The README frames this in a stonemason's metaphor, kept throughout: raw context is a rough stone from the quarry — irregular, heavy, unfit for the wall. Three tools work it into a finished ashlar (a squared building stone) fit for use: the 24-inch gauge to measure, the common gavel to knock off gross excess, the chisel to smooth what's left.
 
 <p align="center">
   <img src="assets/ashlars.svg" alt="Rough ashlar to perfect ashlar" width="520">
@@ -24,34 +26,54 @@ An AI agent's context is quarried the same way. Every tool call — a file read,
 
 ## The Working Tools
 
-**24-inch Gauge** — measures. Every block of context is counted before it is touched: tokens in, tokens out, waste identified.
+Three tools, three jobs — each maps to a real piece of the toolkit:
 
-**Common Gavel** — knocks off the gross excess. Repeated file reads collapse to diffs. Duplicate tool output collapses to one copy. The dead weight falls away before any fine work begins.
+**24-inch Gauge — measure.** Every block of context is counted before it's touched: tokens in, tokens out, waste identified. This is what `record`/`report` do.
+
+**Common Gavel — knock off the gross excess.** `gavel` caches the last-seen content per key; a repeat read of the same file/resource collapses to a one-line "unchanged" marker or a unified diff instead of the full body again.
 
 <!-- The 47th Problem of Euclid proves what the square only assumes. Measure twice; the ledger is the proof. -->
 
-**Chisel** — smooths what the gavel leaves. Verbose logs, walls of stack trace, oversized search results — reduced to their load-bearing lines.
+**Chisel — smooth what the gavel leaves.** `chisel` collapses repeated lines, keeps error/warning/traceback lines plus context, and head/tail-truncates anything still oversized — verbose logs, stack traces, and grep dumps reduced to their load-bearing lines.
 
-What enters the yard a rough ashlar leaves it a perfect one: smaller, denser, doing the same work in the wall.
+What enters a rough ashlar leaves a perfect one: smaller, denser, doing the same work in the wall.
 
 ## Keeping the Ledger
 
-Every lodge keeps its minutes. `bin/ashlar` is the Secretary's book for this one — it records what each stone weighed before the gavel and after, so the labor of the workmen is never lost to memory.
+`bin/ashlar` is a single-file Python (stdlib only) CLI with four subcommands: `record`, `report`, `gavel`, `chisel`. It writes to a JSONL ledger at `~/.ashlar/ledger.jsonl` (one line per recorded compaction) so savings aren't lost between sessions.
 
 ```
+# Type in counts you already know:
 $ ashlar record --before 14200 --after 3100 --label "grep dump, auth module"
 Recorded: 14200 -> 3100 tokens (78% cut)
 
+# ...or let ashlar estimate token counts from actual content (chars/4 heuristic, not a real tokenizer):
+$ ashlar record --before-file raw_output.txt --after-file trimmed_output.txt --label "log dump"
+
+# Totals across everything recorded:
 $ ashlar report
 Stones dressed:   1
 Rough weight:     14,200 tokens
 Perfect weight:   3,100 tokens
 Waste removed:    11,100 tokens (78%)
+
+# Breakdown per --label, or a time-windowed summary:
+$ ashlar report --by-label
+$ ashlar report --since 7d
+
+# Dedup a repeated read of the same file (diffs against the last-seen version, cached under ~/.ashlar/gavel/):
+$ cat some/file.py | ashlar gavel --key some/file.py
+
+# Trim a verbose log/stack trace/grep dump down to its load-bearing lines:
+$ some_noisy_command 2>&1 | ashlar chisel --max-lines 80
+
+# Either one can log its own savings straight to the ledger:
+$ ashlar chisel --file build.log --record --label "CI build log"
 ```
 
 ## Status
 
-The lodge is at work. `record` and `report` stand today. The gavel and chisel — the actual compaction middleware that trims tool output before it reaches the model — are being cut on the yard.
+All four subcommands are real, working functionality: `record`/`report` to measure, `gavel` to dedup repeated reads, `chisel` to trim verbose output. The [`skill/ashlar`](skill/ashlar/SKILL.md) directory packages `gavel`/`chisel` as a Claude Code skill — usage guidance an agent can follow to invoke them before returning large tool output, portable to any harness that can shell out to a CLI filter.
 
 ## Installation
 
@@ -60,6 +82,8 @@ git clone <this-repo>
 chmod +x ashlar/bin/ashlar
 export PATH="$PATH:/path/to/ashlar/bin"
 ```
+
+Requires Python 3, no other dependencies. Check it's on your PATH with `ashlar --version`.
 
 ## License
 

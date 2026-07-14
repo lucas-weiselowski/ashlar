@@ -1,34 +1,59 @@
 #!/usr/bin/env python3
-"""Ashlar — track token savings from context compaction."""
+"""Ashlar — context-compaction toolkit for AI agents: measure, dedup, and trim tool output."""
+
 import argparse
+import difflib
+import hashlib
 import json
+import re
 import sys
 import time
 from pathlib import Path
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 
 LEDGER_DIR = Path.home() / ".ashlar"
 LEDGER_PATH = LEDGER_DIR / "ledger.jsonl"
+GAVEL_DIR = LEDGER_DIR / "gavel"
 
 # Heuristic only — no real tokenizer here. ~4 chars/token, English-text average.
 CHARS_PER_TOKEN = 4
 
 DURATION_UNITS = {"m": 60, "h": 3600, "d": 86400, "w": 604800}
 
+# Lines worth keeping when chiseling verbose output down to size.
+LOAD_BEARING_RE = re.compile(
+    r"\b(error|exception|traceback|fail(?:ed|ure)?|fatal|panic|"
+    r"warn(?:ing)?|denied|refused|timeout|not found|assert\w*)\b",
+    re.IGNORECASE,
+)
+
 
 def parse_duration(s):
     unit = s[-1]
     if unit not in DURATION_UNITS or not s[:-1].isdigit():
-        raise argparse.ArgumentTypeError(
-            f"invalid duration {s!r}, expected e.g. 30m, 24h, 7d, 2w"
-        )
+        raise argparse.ArgumentTypeError(f"invalid duration {s!r}, expected e.g. 30m, 24h, 7d, 2w")
     return int(s[:-1]) * DURATION_UNITS[unit]
 
 
-def _read_source(path):
-    text = sys.stdin.read() if path == "-" else Path(path).read_text()
+def _read_text(path):
+    return sys.stdin.read() if path == "-" else Path(path).read_text()
+
+
+def _estimate_tokens(text):
     return len(text) // CHARS_PER_TOKEN
+
+
+def _read_source(path):
+    return _estimate_tokens(_read_text(path))
+
+
+def _append_ledger(before, after, label):
+    LEDGER_DIR.mkdir(parents=True, exist_ok=True)
+    entry = {"ts": time.time(), "before": before, "after": after, "label": label or ""}
+    with LEDGER_PATH.open("a") as f:
+        f.write(json.dumps(entry) + "\n")
+    return entry
 
 
 def _resolve_count(parser, name, explicit, file_arg):
@@ -45,13 +70,104 @@ def cmd_record(args, parser):
     before = _resolve_count(parser, "before", args.before, args.before_file)
     after = _resolve_count(parser, "after", args.after, args.after_file)
 
-    LEDGER_DIR.mkdir(parents=True, exist_ok=True)
-    entry = {"ts": time.time(), "before": before, "after": after, "label": args.label or ""}
-    with LEDGER_PATH.open("a") as f:
-        f.write(json.dumps(entry) + "\n")
+    _append_ledger(before, after, args.label)
     saved = before - after
     pct = (saved / before * 100) if before else 0
     print(f"Recorded: {before} -> {after} tokens ({pct:.0f}% cut)")
+
+
+def _gavel_cache_path(key):
+    digest = hashlib.sha256(key.encode()).hexdigest()[:16]
+    return GAVEL_DIR / f"{digest}.txt"
+
+
+def cmd_gavel(args, _parser):
+    """Dedup repeated tool output: diff new content against the last-seen version for --key."""
+    text = _read_text(args.file) if args.file else sys.stdin.read()
+    before_tokens = _estimate_tokens(text)
+
+    GAVEL_DIR.mkdir(parents=True, exist_ok=True)
+    cache_path = _gavel_cache_path(args.key)
+
+    if not cache_path.exists():
+        note = "first read of this key, cached in full"
+        output = text
+    elif cache_path.read_text() == text:
+        note = "identical to cached version"
+        output = f"<unchanged since last read: {args.key}>\n"
+    else:
+        old = cache_path.read_text()
+        note = "diffed against cached version"
+        output = "".join(
+            difflib.unified_diff(
+                old.splitlines(keepends=True),
+                text.splitlines(keepends=True),
+                fromfile=f"{args.key} (cached)",
+                tofile=f"{args.key} (new)",
+            )
+        )
+    cache_path.write_text(text)
+
+    sys.stdout.write(output)
+    after_tokens = _estimate_tokens(output)
+    saved = before_tokens - after_tokens
+    pct = (saved / before_tokens * 100) if before_tokens else 0
+    print(f"[gavel] {note}: {before_tokens} -> {after_tokens} tokens ({pct:.0f}% cut)", file=sys.stderr)
+
+    if args.record:
+        _append_ledger(before_tokens, after_tokens, args.label or f"gavel:{args.key}")
+
+
+def _collapse_repeats(lines):
+    collapsed = []
+    i, n = 0, len(lines)
+    while i < n:
+        j = i + 1
+        while j < n and lines[j] == lines[i]:
+            j += 1
+        count = j - i
+        collapsed.append(lines[i] if count == 1 else f"{lines[i]}  (×{count})")
+        i = j
+    return collapsed
+
+
+def _select_load_bearing(lines, context):
+    keep = set()
+    for i, line in enumerate(lines):
+        if LOAD_BEARING_RE.search(line):
+            keep.update(range(max(0, i - context), min(len(lines), i + context + 1)))
+    return keep
+
+
+def cmd_chisel(args, _parser):
+    """Reduce verbose text (logs, stack traces, search dumps) to its load-bearing lines."""
+    text = _read_text(args.file) if args.file else sys.stdin.read()
+    before_tokens = _estimate_tokens(text)
+    raw_lines = text.splitlines()
+
+    lines = _collapse_repeats(raw_lines)
+    keep = _select_load_bearing(lines, args.context)
+    selected = [lines[i] for i in sorted(keep)] if keep else lines
+
+    if len(selected) > args.max_lines:
+        head = args.max_lines // 2
+        tail = args.max_lines - head
+        elided = len(selected) - head - tail
+        selected = selected[:head] + [f"... {elided} lines elided ..."] + selected[-tail:]
+
+    output = "\n".join(selected) + ("\n" if selected else "")
+    sys.stdout.write(output)
+    after_tokens = _estimate_tokens(output)
+    saved = before_tokens - after_tokens
+    pct = (saved / before_tokens * 100) if before_tokens else 0
+    print(
+        f"[chisel] {len(raw_lines)} -> {len(selected)} lines, "
+        f"{before_tokens} -> {after_tokens} tokens ({pct:.0f}% cut)",
+        file=sys.stderr,
+    )
+
+    if args.record:
+        _append_ledger(before_tokens, after_tokens, args.label or "chisel")
 
 
 def _load_entries(since_seconds):
@@ -119,9 +235,30 @@ def main():
     p_record.add_argument("--label", type=str, default=None)
     p_record.set_defaults(func=cmd_record)
 
+    p_gavel = sub.add_parser("gavel", help="dedup repeated tool output against the last-seen version")
+    p_gavel.add_argument("--key", required=True, help="identifier for the stream being deduped, e.g. a file path")
+    p_gavel.add_argument("--file", default=None, help="path to read new content from; defaults to stdin")
+    p_gavel.add_argument("--record", action="store_true", help="log before/after token counts to the ledger")
+    p_gavel.add_argument("--label", type=str, default=None)
+    p_gavel.set_defaults(func=cmd_gavel)
+
+    p_chisel = sub.add_parser("chisel", help="reduce verbose text to its load-bearing lines")
+    p_chisel.add_argument("--file", default=None, help="path to read from; defaults to stdin")
+    p_chisel.add_argument("--max-lines", type=int, default=200, help="output cap; head/tail kept, middle elided")
+    p_chisel.add_argument("--context", type=int, default=2, help="lines of context kept around each match")
+    p_chisel.add_argument("--record", action="store_true", help="log before/after token counts to the ledger")
+    p_chisel.add_argument("--label", type=str, default=None)
+    p_chisel.set_defaults(func=cmd_chisel)
+
     p_report = sub.add_parser("report", help="show cumulative savings")
     p_report.add_argument("--by-label", action="store_true", help="break down savings per label")
-    p_report.add_argument("--since", type=parse_duration, default=None, metavar="DURATION", help="only include entries within e.g. 30m, 24h, 7d, 2w")
+    p_report.add_argument(
+        "--since",
+        type=parse_duration,
+        default=None,
+        metavar="DURATION",
+        help="only include entries within e.g. 30m, 24h, 7d, 2w",
+    )
     p_report.set_defaults(func=cmd_report)
 
     args = parser.parse_args()
