@@ -53,14 +53,76 @@ jobs:
       - run: chmod +x bin/ashlar
       - run: python -m pytest -v
 
-  publish:
+  build-binaries:
     needs: verify
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            asset_name: ashlar-linux-x86_64
+          - os: macos-latest
+            asset_name: ashlar-macos-arm64
+          - os: macos-15-intel
+            asset_name: ashlar-macos-x86_64
+          - os: windows-latest
+            asset_name: ashlar-windows-x86_64.exe
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: requirements-build.txt
+
+      - run: pip install -r requirements-build.txt
+      - run: python -m PyInstaller --onefile --name ashlar bin/ashlar
+
+      - name: Rename build output to the platform asset name
+        shell: bash
+        run: |
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            mv dist/ashlar.exe "dist/${{ matrix.asset_name }}"
+          else
+            mv dist/ashlar "dist/${{ matrix.asset_name }}"
+            chmod +x "dist/${{ matrix.asset_name }}"
+          fi
+
+      - name: Smoke test the built binary
+        shell: bash
+        run: |
+          set -euo pipefail
+          BIN="dist/${{ matrix.asset_name }}"
+          export HOME="$RUNNER_TEMP/ashlar-home"
+          mkdir -p "$HOME"
+          "$BIN" --version
+          "$BIN" record --before 1000 --after 100 --label smoke
+          "$BIN" report --by-label
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ${{ matrix.asset_name }}
+          path: dist/${{ matrix.asset_name }}
+          retention-days: 7
+
+  publish:
+    needs: [verify, build-binaries]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
       contents: write
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          path: dist-binaries
+          merge-multiple: true
+
+      - name: Generate checksums
+        working-directory: dist-binaries
+        run: sha256sum ./* > SHA256SUMS
 
       - name: Extract release notes
         id: notes
@@ -73,3 +135,4 @@ jobs:
           name: v${{ needs.verify.outputs.version }}
           body_path: /tmp/release-notes.md
           generate_release_notes: false
+          files: dist-binaries/*
