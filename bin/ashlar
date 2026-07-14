@@ -2,65 +2,130 @@
 """Ashlar — track token savings from context compaction."""
 import argparse
 import json
+import sys
 import time
 from pathlib import Path
+
+__version__ = "0.1.0"
 
 LEDGER_DIR = Path.home() / ".ashlar"
 LEDGER_PATH = LEDGER_DIR / "ledger.jsonl"
 
+# Heuristic only — no real tokenizer here. ~4 chars/token, English-text average.
+CHARS_PER_TOKEN = 4
 
-def cmd_record(args):
+DURATION_UNITS = {"m": 60, "h": 3600, "d": 86400, "w": 604800}
+
+
+def parse_duration(s):
+    unit = s[-1]
+    if unit not in DURATION_UNITS or not s[:-1].isdigit():
+        raise argparse.ArgumentTypeError(
+            f"invalid duration {s!r}, expected e.g. 30m, 24h, 7d, 2w"
+        )
+    return int(s[:-1]) * DURATION_UNITS[unit]
+
+
+def _read_source(path):
+    text = sys.stdin.read() if path == "-" else Path(path).read_text()
+    return len(text) // CHARS_PER_TOKEN
+
+
+def _resolve_count(parser, name, explicit, file_arg):
+    if explicit is not None and file_arg is not None:
+        parser.error(f"--{name} and --{name}-file are mutually exclusive")
+    if explicit is not None:
+        return explicit
+    if file_arg is not None:
+        return _read_source(file_arg)
+    parser.error(f"either --{name} or --{name}-file is required")
+
+
+def cmd_record(args, parser):
+    before = _resolve_count(parser, "before", args.before, args.before_file)
+    after = _resolve_count(parser, "after", args.after, args.after_file)
+
     LEDGER_DIR.mkdir(parents=True, exist_ok=True)
-    entry = {
-        "ts": time.time(),
-        "before": args.before,
-        "after": args.after,
-        "label": args.label or "",
-    }
+    entry = {"ts": time.time(), "before": before, "after": after, "label": args.label or ""}
     with LEDGER_PATH.open("a") as f:
         f.write(json.dumps(entry) + "\n")
-    saved = args.before - args.after
-    pct = (saved / args.before * 100) if args.before else 0
-    print(f"Recorded: {args.before} -> {args.after} tokens ({pct:.0f}% cut)")
+    saved = before - after
+    pct = (saved / before * 100) if before else 0
+    print(f"Recorded: {before} -> {after} tokens ({pct:.0f}% cut)")
 
 
-def cmd_report(_args):
+def _load_entries(since_seconds):
     if not LEDGER_PATH.exists():
-        print("No stones dressed yet. Run `ashlar record` first.")
-        return
-    total_before = total_after = count = 0
+        return []
+    cutoff = time.time() - since_seconds if since_seconds else None
+    entries = []
     with LEDGER_PATH.open() as f:
         for line in f:
             line = line.strip()
             if not line:
                 continue
             entry = json.loads(line)
-            total_before += entry["before"]
-            total_after += entry["after"]
-            count += 1
+            if cutoff is not None and entry["ts"] < cutoff:
+                continue
+            entries.append(entry)
+    return entries
+
+
+def _print_summary(entries, heading="Stones dressed"):
+    total_before = sum(e["before"] for e in entries)
+    total_after = sum(e["after"] for e in entries)
     saved = total_before - total_after
     pct = (saved / total_before * 100) if total_before else 0
-    print(f"Stones dressed:   {count}")
+    print(f"{heading}:   {len(entries)}")
     print(f"Rough weight:     {total_before:,} tokens")
     print(f"Perfect weight:   {total_after:,} tokens")
     print(f"Waste removed:    {saved:,} tokens ({pct:.0f}%)")
 
 
+def cmd_report(args, _parser):
+    entries = _load_entries(args.since)
+    if not entries:
+        print("No stones dressed yet. Run `ashlar record` first.")
+        return
+
+    if not args.by_label:
+        _print_summary(entries)
+        return
+
+    by_label = {}
+    for e in entries:
+        by_label.setdefault(e["label"] or "(no label)", []).append(e)
+
+    header = f"{'Label':<32}{'Count':>7}{'Rough':>12}{'Perfect':>12}{'Saved':>12}{'%':>6}"
+    print(header)
+    for label, group in sorted(by_label.items(), key=lambda kv: -sum(e["before"] - e["after"] for e in kv[1])):
+        before = sum(e["before"] for e in group)
+        after = sum(e["after"] for e in group)
+        saved = before - after
+        pct = (saved / before * 100) if before else 0
+        print(f"{label[:31]:<32}{len(group):>7}{before:>12,}{after:>12,}{saved:>12,}{pct:>5.0f}%")
+
+
 def main():
     parser = argparse.ArgumentParser(prog="ashlar")
+    parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
     sub = parser.add_subparsers(dest="command", required=True)
 
     p_record = sub.add_parser("record", help="record a compaction result")
-    p_record.add_argument("--before", type=int, required=True)
-    p_record.add_argument("--after", type=int, required=True)
+    p_record.add_argument("--before", type=int, default=None)
+    p_record.add_argument("--after", type=int, default=None)
+    p_record.add_argument("--before-file", default=None, help="path or '-' for stdin; token count estimated as chars/4")
+    p_record.add_argument("--after-file", default=None, help="path or '-' for stdin; token count estimated as chars/4")
     p_record.add_argument("--label", type=str, default=None)
     p_record.set_defaults(func=cmd_record)
 
     p_report = sub.add_parser("report", help="show cumulative savings")
+    p_report.add_argument("--by-label", action="store_true", help="break down savings per label")
+    p_report.add_argument("--since", type=parse_duration, default=None, metavar="DURATION", help="only include entries within e.g. 30m, 24h, 7d, 2w")
     p_report.set_defaults(func=cmd_report)
 
     args = parser.parse_args()
-    args.func(args)
+    args.func(args, parser)
 
 
 if __name__ == "__main__":
