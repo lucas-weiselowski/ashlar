@@ -11,9 +11,11 @@ tail of stdout.
 COST MODEL: this interpreter starts on every single Bash tool call,
 regardless of output size — the plugin.json matcher is unconditionally
 "Bash"; there is no hook-level mechanism to gate on tool_response size
-before the hook process itself launches. MIN_TOKENS_TO_COMPACT below
-only gates the second, more expensive subprocess (`ashlar chisel`).
-The floor cost is one python3 cold start per Bash call, always paid.
+before the hook process itself launches. MIN_TOKENS_TO_COMPACT and
+MAX_BYTES_TO_COMPACT below gate the one `ashlar chisel` subprocess this
+hook spawns (it also does the ledger recording, via --record, so there's
+never a second subprocess). The floor cost is one python3 cold start per
+Bash call, always paid.
 """
 
 import json
@@ -29,6 +31,10 @@ CHARS_PER_TOKEN = 4  # same heuristic bin/ashlar uses everywhere; duplicated
 
 MIN_TOKENS_TO_COMPACT = 500  # ~2000 chars; below this, subprocess overhead
 # for `ashlar chisel` (~35-40ms) isn't worth it.
+MAX_BYTES_TO_COMPACT = 2_000_000  # ~2MB; above this, chisel's own hash/write/
+# regex-scan cost isn't worth paying on a hot
+# path that fires on every qualifying Bash
+# call — skip and passthrough instead.
 TAIL_GUARD_LINES = 20  # final N lines of stdout are always preserved
 # verbatim — exit-status-adjacent content
 # usually lives there and chisel's regex
@@ -36,7 +42,6 @@ TAIL_GUARD_LINES = 20  # final N lines of stdout are always preserved
 
 ASHLAR_BIN = Path(__file__).resolve().parent.parent / "bin" / "ashlar"
 CHISEL_TIMEOUT_SECONDS = 5
-RECORD_TIMEOUT_SECONDS = 3
 
 
 def _estimate_tokens(text):
@@ -88,12 +93,24 @@ def main():
     if before_tokens < MIN_TOKENS_TO_COMPACT:
         _passthrough()
 
-    if not ASHLAR_BIN.exists():
+    if len(stdout) > MAX_BYTES_TO_COMPACT:
         _passthrough()
 
     try:
+        # --record here logs chisel's own before/after, not this hook's final
+        # size (the tail-guard below can still add lines back) — a one-process
+        # tradeoff for avoiding a second interpreter cold start on every call.
         chisel_proc = subprocess.run(
-            [sys.executable, str(ASHLAR_BIN), "chisel", "--max-lines", "500"],
+            [
+                sys.executable,
+                str(ASHLAR_BIN),
+                "chisel",
+                "--max-lines",
+                "500",
+                "--record",
+                "--label",
+                "auto:posttooluse:bash",
+            ],
             input=stdout,
             capture_output=True,
             text=True,
@@ -111,12 +128,23 @@ def main():
 
     raw_lines = stdout.splitlines()
     tail_lines = raw_lines[-TAIL_GUARD_LINES:]
-    tail_text = "\n".join(tail_lines)
 
     chiseled_body = chiseled[:-1] if chiseled.endswith("\n") else chiseled
-    if tail_lines and not chiseled_body.endswith(tail_text):
-        marker = f"\n... [ashlar: preserving final {len(tail_lines)} lines of original output] ...\n"
-        chiseled = chiseled_body + marker + tail_text + "\n"
+    chiseled_lines = chiseled_body.splitlines()
+    kept_verbatim = set(chiseled_lines)
+    # A tail line already present as a collapsed "line  (×N)" summary (see
+    # bin/ashlar's _collapse_repeats) counts as kept — comparing the whole
+    # block with endswith() misses this and re-appends it as a duplicate.
+    missing_tail = [
+        line
+        for line in tail_lines
+        if line not in kept_verbatim and not any(cl.startswith(line + "  (×") for cl in chiseled_lines)
+    ]
+    if missing_tail:
+        marker = f"\n... [ashlar: preserving {len(missing_tail)} line(s) of original tail not otherwise present] ...\n"
+        chiseled = chiseled_body + marker + "\n".join(missing_tail) + "\n"
+    else:
+        chiseled = chiseled_body + "\n"
 
     after_tokens = _estimate_tokens(chiseled)
 
@@ -142,27 +170,6 @@ def main():
 
     print(rendered)
     sys.stdout.flush()
-
-    try:
-        subprocess.run(
-            [
-                sys.executable,
-                str(ASHLAR_BIN),
-                "record",
-                "--before",
-                str(before_tokens),
-                "--after",
-                str(after_tokens),
-                "--label",
-                "auto:posttooluse:bash",
-            ],
-            capture_output=True,
-            text=True,
-            timeout=RECORD_TIMEOUT_SECONDS,
-        )
-    except Exception:
-        pass
-
     sys.exit(0)
 
 

@@ -109,3 +109,48 @@ def test_compaction_writes_ledger_entry(tmp_path):
     entry = json.loads(ledger.read_text().splitlines()[-1])
     assert entry["label"] == "auto:posttooluse:bash"
     assert entry["after"] < entry["before"]
+
+
+def test_compaction_spawns_only_one_subprocess(tmp_path):
+    # Regression: chisel and record used to be two separate subprocess spawns
+    # per compacted call. chisel's --record flag does both in one process now.
+    big_stdout = "\n".join(f"line {i}" for i in range(2000))
+    run_hook(bash_payload(big_stdout), tmp_path)
+
+    ledger = tmp_path / ".ashlar" / "ledger.jsonl"
+    assert len(ledger.read_text().splitlines()) == 1  # exactly one record, not two
+
+
+def test_repeated_tail_lines_are_not_duplicated(tmp_path):
+    # Regression: the tail-guard used to compare against RAW stdout lines, but
+    # chisel collapses repeated lines into "line  (×N)" first, so the naive
+    # endswith() check always failed on a repetitive tail and re-appended the
+    # raw duplicates on top of the already-collapsed summary.
+    lines = [f"setup line {i}" for i in range(300)] + ["retrying..."] * 25
+    big_stdout = "\n".join(lines)
+    result = run_hook(bash_payload(big_stdout), tmp_path)
+
+    assert result.returncode == 0
+    updated = json.loads(result.stdout)["hookSpecificOutput"]["updatedToolOutput"]
+    assert updated["stdout"].count("retrying...") <= 2  # collapsed summary, not 25 raw repeats
+
+
+def test_oversized_stdout_over_byte_cap_is_passthrough(tmp_path):
+    huge_stdout = "x" * 3_000_000  # over MAX_BYTES_TO_COMPACT
+    result = run_hook(bash_payload(huge_stdout), tmp_path)
+    assert result.returncode == 0
+    assert result.stdout == ""
+
+
+def test_keyword_filtered_output_still_carries_recovery_pointer(tmp_path):
+    # Regression: recovery previously only fired on --max-lines elision. Most
+    # real compaction never reaches elision — it's filtered by keyword match
+    # alone — and that path had zero recovery before this fix.
+    lines = [f"noise {i}" for i in range(600)]
+    lines[300] = "warning: something happened"
+    big_stdout = "\n".join(lines)
+    result = run_hook(bash_payload(big_stdout), tmp_path)
+
+    assert result.returncode == 0
+    updated = json.loads(result.stdout)["hookSpecificOutput"]["updatedToolOutput"]
+    assert "full original at" in updated["stdout"]
