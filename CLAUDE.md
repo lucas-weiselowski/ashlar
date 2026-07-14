@@ -24,6 +24,7 @@ chmod +x bin/ashlar                                   # first run only
 ./bin/ashlar report --since 7d
 ./bin/ashlar gavel --key some/file.py --file some/file.py
 ./bin/ashlar chisel --file build.log --max-lines 80
+./bin/ashlar doctor
 ./bin/ashlar --version
 ```
 
@@ -31,7 +32,7 @@ chmod +x bin/ashlar                                   # first run only
 
 ## Architecture
 
-- `bin/ashlar` — the entire CLI. Single-file Python script, stdlib `argparse` with four subcommands (`record`, `report`, `gavel`, `chisel`). No package structure, no external deps — keep it that way unless the tool actually grows past a single file.
+- `bin/ashlar` — the entire CLI. Single-file Python script, stdlib `argparse` with five subcommands (`record`, `report`, `gavel`, `chisel`, `doctor`). No package structure, no external deps — keep it that way unless the tool actually grows past a single file. `doctor` isn't part of the gauge/gavel/chisel compaction-tool naming below — it's a diagnostics command (ledger/cache health, PATH check, and — if `hooks/posttooluse_bash_chisel.py` exists alongside this checkout — the manual `.claude/settings.json` wiring snippet for people not using the plugin installer), a different category, not another compaction primitive.
 - Ledger storage is `~/.ashlar/ledger.jsonl` (home directory, **not** in this repo) — one JSON object per line: `{ts, before, after, label}`. `report` sums the whole file. Entries older than `--max-ledger-age` (default 90d, `0` disables) are pruned on every `record` call, before the new entry is appended — same pattern as `gavel`'s cache eviction. `gavel`'s per-key cache lives alongside it at `~/.ashlar/gavel/<sha256(key)[:16]>.txt`; `chisel` writes a full recovery copy to `~/.ashlar/chisel/<sha256(text)[:16]>.txt` whenever it drops *any* content (filtered by keyword or elided by `--max-lines`) — mode `0600` (command output routinely holds secrets) and pruned to the 200 most recent files, unlike the ledger/gavel cache.
 - `skill/ashlar/SKILL.md` — Claude Code skill documenting when/how to invoke `gavel`/`chisel` (opt-in, agent decides). `skill/ashlar/scripts/ashlar` is a relative symlink to `bin/ashlar` (single source of truth stays in `bin/`); if you move either file, fix the symlink.
 - `hooks/posttooluse_bash_chisel.py` — Claude Code `PostToolUse` hook (transparent, no agent decision needed) that pipes large Bash stdout through `bin/ashlar chisel` before Claude sees it. Not part of `bin/ashlar` itself (single-file rule stays scoped to the CLI) — shells out to it like any other caller. Wired via `.claude-plugin/plugin.json`'s `hooks.PostToolUse` with `matcher: "Bash"`. Fails safe to passthrough on anything it isn't fully certain about; see the file's own docstring for the exact contract.
