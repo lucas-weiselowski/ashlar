@@ -47,3 +47,4 @@ if [ -n "$here" ]; then
 fi
 
 echo "ashlar: done. Restart Claude Code (or start a new session) to pick up the skill."
+echo "ashlar: once restarted, ask Claude to run 'ashlar doctor' to verify the install (ledger/cache status, hook wiring)."
