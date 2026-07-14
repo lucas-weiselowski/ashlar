@@ -51,6 +51,92 @@ Keep any future additions consistent with this naming rather than inventing new 
 
 `__version__` lives in `bin/ashlar` (SemVer). `CHANGELOG.md` follows Keep a Changelog. Each release: bump `__version__`, move `[Unreleased]` entries into a dated version section in `CHANGELOG.md`, tag `vX.Y.Z` (annotated) on the release commit, push the tag — `release.yml` verifies version/changelog agree, re-runs tests, and publishes the GitHub Release automatically. A mismatch (forgot to bump, or CHANGELOG section missing) fails the workflow before anything is published.
 
+## Parallel development workflow (worktrees + agents)
+
+Lets multiple Claude Code agents work on ashlar at once without clobbering
+each other, while `main` stays releasable and CI green.
+
+**Standing authorization scope**: this section *is* the user's standing
+authorization for agents to commit and push on non-`main` branches per the
+rules below, without asking each time. It does **not** extend to merging
+into `main`, tagging, or pushing tags — those stay per-action, ask-first
+(merge/tag are harder to reverse and touch shared state).
+
+### Topology
+- Main checkout (`/Users/lucas/Documents/Code/ashlar`) stays clean, on
+  `main`, always releasable. Never used for direct feature edits — only
+  merges, tags, and release commits.
+- Each feature/fix gets its own branch + its own git worktree, sibling to
+  the main checkout: `../ashlar-worktrees/<slug>/`. One agent per worktree,
+  one worktree per branch — never two agents in the same worktree or on
+  the same branch concurrently.
+- Prefer the Agent tool's `isolation: "worktree"` option to spin these up
+  (auto-created, auto-removed if the agent makes no changes) over
+  hand-running `git worktree add` for ad hoc parallel work. Use manual
+  `git worktree add -b <branch> ../ashlar-worktrees/<slug>` only when a
+  worktree must persist across multiple turns/sessions.
+- Branch naming: `feat/<slug>`, `fix/<slug>`, `chore/<slug>` — matches the
+  Conventional Commits type already used for commit subjects.
+
+### Before starting work in a new worktree
+Check other open branches/worktrees for overlap on `bin/ashlar` (it's a
+single file, no module boundaries — two agents editing the same
+subcommand concurrently will conflict): `git diff main...<other-branch> --
+bin/ashlar` for each active branch. If scopes overlap, serialize instead
+of parallelizing — don't spawn both at once.
+
+### Commit policy (inside a worktree)
+Commit when a coherent unit of work is done AND `ruff check .`,
+`ruff format --check .`, `python -m pytest -v` all pass in that worktree.
+Never commit red/broken state. Small, atomic commits, Conventional
+Commits format, trailer `Co-Authored-By: Claude <noreply@anthropic.com>`
+(existing repo convention — no model name, no Claude-Session line);
+generate the message via `/caveman:caveman-commit`. Never commit directly
+to `main` from a worktree.
+
+### Push + PR policy
+Before opening a PR, rebase the branch onto latest `main`
+(`git fetch origin && git rebase origin/main`). `CHANGELOG.md`
+`[Unreleased]` conflicts during rebase are expected when branches land in
+parallel — resolve by keeping both entries (append, don't drop either
+side). Then `git push -u origin <branch>` and `gh pr create` targeting
+`main`. Self-review the diff (e.g. via the `code-reviewer` agent or
+`/code-review`) before opening the PR — cuts down what the solo human
+maintainer has to catch by hand.
+
+### Merge policy
+Merge to `main` only when CI is green on the PR **and** the user has
+confirmed that specific merge. Always squash-merge
+(`gh pr merge --squash --delete-branch`) — commit history inside a
+feature branch isn't worth preserving in this repo, so there's no
+judgment call to make. After merge (or if a PR is rejected/abandoned):
+`git worktree remove ../ashlar-worktrees/<slug>` and confirm the remote
+branch is gone, so worktrees never pile up stale.
+
+### Tag / release policy
+Unchanged from "Versioning / releases" below, just anchored here: tag
+only from `main`, only when the user explicitly asks to cut a release —
+never autonomously. Push the tag immediately after creating it (that's
+what triggers `release.yml`). If `release.yml` fails *after* the tag is
+already pushed, don't force-move or delete the public tag — fix the
+underlying issue, bump to the next patch version, and cut a new tag
+instead.
+
+### Decision table
+| Action | Who decides | Trigger |
+|---|---|---|
+| commit | agent, in its worktree | unit done + lint/tests green |
+| push branch | agent | ready for CI/review (rebased on main first) |
+| open PR | agent | after push, after self-review |
+| merge to main | user confirms, agent executes | CI green + user OK |
+| tag release | user asks explicitly | releasable set merged to main |
+| push tag | agent, immediately after tagging | always (triggers release.yml) |
+
+### Not yet enforced
+Branch protection (required status checks on `main`) isn't configured —
+this workflow is doc-level policy, not repo-enforced. Consider enabling
+it in GitHub settings if agents start bypassing the PR flow.
+
 ## Conventions specific to this repo
 
 - Commit trailer: `Co-Authored-By: Claude <noreply@anthropic.com>` — no model name/version, and no `Claude-Session:` line. This differs from the default global convention and is intentional for this project.
