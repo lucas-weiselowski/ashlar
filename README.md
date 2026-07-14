@@ -108,6 +108,10 @@ $ ashlar chisel --file build.log --record --label "CI build log"
 
 Six scenarios measured against real and representative content — unchanged/small-diff/large-diff repeat reads through `gavel`; a verbose test run, a large grep dump, and a build log with a stack trace through `chisel`. **84% of input tokens cut, weighted across all scenarios** (79% simple average of the six). Full methodology, per-scenario numbers, and two limitations found along the way — a regex gap that can drop exception messages from a truncated traceback ([#5](https://github.com/lucas-weiselowski/ashlar/issues/5)), and a case where `gavel` costs tokens instead of saving them — are in the [benchmark report](docs/benchmark-report.html).
 
+## Related
+
+Ashlar cuts input tokens by compacting tool output before it reaches the model. [caveman](https://github.com/JuliusBrussee/caveman) is a mirrored addition on the same input-token problem, from the other side — compressing the agent's own communication style instead of tool output.
+
 ## License
 
 MIT — see [LICENSE](LICENSE).
