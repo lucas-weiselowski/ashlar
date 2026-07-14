@@ -23,6 +23,7 @@ LEDGER_PATH = LEDGER_DIR / "ledger.jsonl"
 LEDGER_LOCK_PATH = LEDGER_DIR / ".ledger.lock"
 GAVEL_DIR = LEDGER_DIR / "gavel"
 GAVEL_LOCK_PATH = LEDGER_DIR / ".gavel.lock"
+CHISEL_DIR = LEDGER_DIR / "chisel"
 
 # Heuristic only — no real tokenizer here. ~4 chars/token, English-text average.
 CHARS_PER_TOKEN = 4
@@ -34,14 +35,19 @@ DURATION_UNITS = {"m": 60, "h": 3600, "d": 86400, "w": 604800}
 # anyone relying on --since windows, short enough to keep `report` scans cheap.
 DEFAULT_MAX_LEDGER_AGE = 90 * DURATION_UNITS["d"]
 
-# Lines worth keeping when chiseling verbose output down to size.
+# Lines worth keeping when chiseling verbose output down to size. A fixed keyword
+# list is inherently incomplete — anything it misses can be dropped by the
+# load-bearing filter itself, not just by --max-lines elision, which is why ANY
+# drop (filtered or elided) keeps a recovery path (see _save_full_text) instead
+# of removing content with no way back.
 # The second alternative has no leading \b on purpose — CamelCase names like
 # ValueError/KeyError butt up against the preceding word with no boundary, so
 # \berror\b alone never matches them. It's scoped case-sensitive via (?-i:...)
 # so it only catches CamelCase, not e.g. "terror"/"preexception" matching the
 # lowercase "error"/"exception" substring under the pattern's global IGNORECASE.
 LOAD_BEARING_RE = re.compile(
-    r"\b(error|exception|traceback|fail(?:ed|ure)?|fatal|panic|"
+    r"\b(error|exception|traceback|fail(?:ed|ure)?|fatal|panic|critical|alert|"
+    r"abort(?:ed)?|invalid|corrupt(?:ed)?|"
     r"warn(?:ing)?|denied|refused|timeout|not found|assert\w*)\b"
     r"|\w*(?-i:Error|Exception)\b",
     re.IGNORECASE,
@@ -237,6 +243,16 @@ def _select_load_bearing(lines, context, extra_patterns=None):
     return keep
 
 
+def _save_full_text(text):
+    """Elision is lossy against a fixed keyword list, so anything dropped must stay
+    recoverable by path rather than gone — same cache-by-hash pattern as gavel."""
+    CHISEL_DIR.mkdir(parents=True, exist_ok=True)
+    digest = hashlib.sha256(text.encode()).hexdigest()[:16]
+    path = CHISEL_DIR / f"{digest}.txt"
+    path.write_text(text)
+    return path
+
+
 def cmd_chisel(args, _parser):
     """Reduce verbose text (logs, stack traces, search dumps) to its load-bearing lines."""
     text = _read_text(args.file) if args.file else sys.stdin.read()
@@ -251,7 +267,12 @@ def cmd_chisel(args, _parser):
         head = args.max_lines // 2
         tail = args.max_lines - head
         elided = len(selected) - head - tail
-        selected = selected[:head] + [f"... {elided} lines elided ..."] + selected[-tail:]
+        full_path = _save_full_text(text)
+        selected = (
+            selected[:head]
+            + [f"... {elided} lines elided, full original at {full_path} ..."]
+            + selected[-tail:]
+        )
 
     output = "\n".join(selected) + ("\n" if selected else "")
     sys.stdout.write(output)
