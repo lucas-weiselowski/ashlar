@@ -287,11 +287,18 @@ def cmd_chisel(args, _parser):
     text = ANSI_ESCAPE_RE.sub("", raw_text)
     raw_lines = text.splitlines()
 
-    raw_lines, lines_truncated = _truncate_long_lines(raw_lines, args.max_line_chars)
+    # Keyword matching runs on full, untruncated lines — an oversized line
+    # (the exact case --max-line-chars targets) can carry its load-bearing
+    # word past the middle where head/tail truncation would otherwise cut it,
+    # dropping the signal before it's ever seen. Truncate only for display,
+    # after selection.
     lines = _collapse_repeats(raw_lines, normalize=args.normalize_repeats)
     keep = _select_load_bearing(lines, args.context)
     selected = [lines[i] for i in sorted(keep)] if keep else lines
-    dropped = lines_truncated or (bool(keep) and len(selected) < len(lines))
+    dropped = bool(keep) and len(selected) < len(lines)
+
+    selected, lines_truncated = _truncate_long_lines(selected, args.max_line_chars)
+    dropped = dropped or lines_truncated
 
     if len(selected) > args.max_lines:
         head = args.max_lines // 2

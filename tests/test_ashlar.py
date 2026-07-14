@@ -229,9 +229,14 @@ def test_chisel_recovery_dir_is_pruned(home, tmp_path):
     lines[10] = "warning: trigger a drop"
     src = tmp_path / "log.txt"
     src.write_text("\n".join(lines))
-    run(["chisel", "--file", str(src)], home)
+    result = run(["chisel", "--file", str(src)], home)
 
     assert len(list(chisel_dir.glob("*.txt"))) <= 200
+    # Pruning must never evict the file this same run just pointed the
+    # recovery marker at — only mtime-ordering bugs would let that slip past
+    # a bare count check.
+    full_path = _extract_recovery_path(result.stdout)
+    assert Path(full_path).exists()
 
 
 def test_chisel_record_flag_writes_ledger(home, tmp_path):
@@ -279,6 +284,34 @@ def test_chisel_strips_ansi_escape_codes(home, tmp_path):
     result = run(["chisel", "--file", str(src)], home)
     assert result.stdout == "ERROR: boom\n"
     assert "\x1b[" not in result.stdout
+
+
+def test_chisel_finds_keyword_buried_in_oversized_line(home, tmp_path):
+    # Regression: if keyword matching ran on already-truncated lines, a
+    # load-bearing word sitting in the elided middle of a huge line (the
+    # exact case --max-line-chars targets) would never even qualify that
+    # line for inclusion — it'd be excluded outright, same as any other
+    # non-matching line, with no trace in the output. A distractor match
+    # elsewhere (line 5) keeps `keep` non-empty-but-selective so the huge
+    # line's fate actually depends on its own match, not the empty-keep
+    # fallback that keeps everything.
+    padding = "x" * 3000
+    lines = [f"debug line {i}" for i in range(50)]
+    lines[5] = "ERROR: canary"
+    lines[30] = f"{padding} FATAL: buried in the middle {padding}"
+    src = tmp_path / "blob.log"
+    src.write_text("\n".join(lines))
+
+    result = run(["chisel", "--file", str(src), "--max-line-chars", "100", "--context", "0"], home)
+    assert "ERROR: canary" in result.stdout
+    # The buried-keyword line was selected (self-matched pre-truncation) and
+    # then truncated for display — its presence, truncated, is the signal.
+    assert "chars elided" in result.stdout
+    # Neighbors of both matches are absent — proves this is selective
+    # inclusion (matching worked), not the empty-keep fallback that would
+    # keep every line in the file regardless.
+    assert "debug line 4" not in result.stdout
+    assert "debug line 29" not in result.stdout
 
 
 def test_chisel_truncates_oversized_single_line(home, tmp_path):
@@ -330,6 +363,20 @@ def test_chisel_handles_invalid_utf8_without_crashing(home, tmp_path):
     result = run(["chisel", "--file", str(src)], home)
     assert result.returncode == 0
     assert "ERROR: boom" in result.stdout
+
+
+def test_gavel_strips_ansi_escape_codes(home, tmp_path):
+    src = tmp_path / "colored.log"
+    src.write_text("\x1b[31mERROR: boom\x1b[0m\n")
+    run(["gavel", "--key", "colored.log", "--file", str(src)], home)
+
+    # A second read that differs only by color codes must read as unchanged —
+    # ANSI stripping happens before both the cache write and the compare.
+    src.write_text("\x1b[32mERROR: boom\x1b[0m\n")
+    result = run(["gavel", "--key", "colored.log", "--file", str(src)], home)
+
+    assert "<unchanged since last read: colored.log>" in result.stdout
+    assert "identical to cached version" in result.stderr
 
 
 def test_gavel_diff_fallback_when_diff_not_smaller(home, tmp_path):
