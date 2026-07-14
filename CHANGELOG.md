@@ -6,6 +6,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Version
 ### Added
 - `release.yml` verify job now checks `.claude-plugin/plugin.json`'s `version` matches the release tag, same as it already does for `bin/ashlar`'s `__version__` — a forgotten bump there used to pass CI silently while leaving installed plugin users stuck without updates.
 - Standalone binaries: every tagged release now builds and publishes PyInstaller binaries for Linux (x86_64), macOS (arm64 and x86_64), and Windows (x86_64), plus a `SHA256SUMS` file, so `ashlar` can be used without Python installed. `requirements-build.txt` pins `pyinstaller`. `ci.yml` gained a fast single-platform build+smoke job so a packaging break shows up on every PR, not just at release time. `.github/dependabot.yml` now also watches the `pip` ecosystem.
+- `record --max-ledger-age` — prunes ledger entries older than the given duration (default 90d, `0` disables) before appending, so `~/.ashlar/ledger.jsonl` no longer grows unbounded on a long-lived install and `report` stays cheap to scan.
 
 ### Changed
 - README: reconciled "three tools" vs "four subcommands" phrasing, renamed "Keeping the Ledger" section to "Using the CLI" since it documents all four subcommands, not just `record`/`report`.

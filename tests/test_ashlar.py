@@ -95,6 +95,44 @@ def test_report_since_excludes_old_entries(home):
     assert "No stones dressed yet" in result.stdout
 
 
+def test_record_prunes_entries_older_than_max_ledger_age(home):
+    run(["record", "--before", "1000", "--after", "500", "--label", "old"], home)
+
+    ledger = home / ".ashlar" / "ledger.jsonl"
+    entries = [json.loads(line) for line in ledger.read_text().splitlines()]
+    entries[0]["ts"] -= 999_999  # push far into the past
+    ledger.write_text("\n".join(json.dumps(e) for e in entries) + "\n")
+
+    run(["record", "--before", "2000", "--after", "1000", "--label", "new", "--max-ledger-age", "1h"], home)
+
+    remaining = [json.loads(line) for line in ledger.read_text().splitlines()]
+    assert len(remaining) == 1
+    assert remaining[0]["label"] == "new"
+
+
+def test_record_max_ledger_age_zero_disables_pruning(home):
+    run(["record", "--before", "1000", "--after", "500", "--label", "old"], home)
+
+    ledger = home / ".ashlar" / "ledger.jsonl"
+    entries = [json.loads(line) for line in ledger.read_text().splitlines()]
+    entries[0]["ts"] -= 999_999  # push far into the past
+    ledger.write_text("\n".join(json.dumps(e) for e in entries) + "\n")
+
+    run(["record", "--before", "2000", "--after", "1000", "--label", "new", "--max-ledger-age", "0"], home)
+
+    remaining = [json.loads(line) for line in ledger.read_text().splitlines()]
+    assert len(remaining) == 2
+
+
+def test_record_default_max_ledger_age_keeps_recent_entries(home):
+    run(["record", "--before", "1000", "--after", "500", "--label", "recent"], home)
+    run(["record", "--before", "2000", "--after", "1000", "--label", "also-recent"], home)
+
+    ledger = home / ".ashlar" / "ledger.jsonl"
+    remaining = [json.loads(line) for line in ledger.read_text().splitlines()]
+    assert len(remaining) == 2
+
+
 def test_gavel_first_read_passes_content_through(home, tmp_path):
     src = tmp_path / "file.py"
     src.write_text("line1\nline2\n")

@@ -21,6 +21,11 @@ CHARS_PER_TOKEN = 4
 
 DURATION_UNITS = {"m": 60, "h": 3600, "d": 86400, "w": 604800}
 
+# Ledger grows unbounded otherwise (append-only, no rotation) — prune on every
+# write, same as gavel's cache eviction. 90d is generous enough to not surprise
+# anyone relying on --since windows, short enough to keep `report` scans cheap.
+DEFAULT_MAX_LEDGER_AGE = 90 * DURATION_UNITS["d"]
+
 # Lines worth keeping when chiseling verbose output down to size.
 # The second alternative has no leading \b on purpose — CamelCase names like
 # ValueError/KeyError butt up against the preceding word with no boundary, so
@@ -42,7 +47,8 @@ def parse_duration(s):
     return int(s[:-1]) * DURATION_UNITS[unit]
 
 
-def parse_cache_age(s):
+def parse_age_or_zero(s):
+    """Like parse_duration, but '0' (no unit suffix) means disable pruning entirely."""
     if s == "0":
         return 0
     return parse_duration(s)
@@ -60,8 +66,29 @@ def _read_source(path):
     return _estimate_tokens(_read_text(path))
 
 
-def _append_ledger(before, after, label):
+def _prune_ledger(max_age_seconds):
+    """Drop ledger entries older than max_age_seconds. Rewrites the file only if something was dropped."""
+    if not max_age_seconds or not LEDGER_PATH.exists():
+        return
+    cutoff = time.time() - max_age_seconds
+    kept = []
+    dropped = False
+    with LEDGER_PATH.open() as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            if json.loads(line)["ts"] < cutoff:
+                dropped = True
+                continue
+            kept.append(line)
+    if dropped:
+        LEDGER_PATH.write_text("".join(line + "\n" for line in kept))
+
+
+def _append_ledger(before, after, label, max_ledger_age=DEFAULT_MAX_LEDGER_AGE):
     LEDGER_DIR.mkdir(parents=True, exist_ok=True)
+    _prune_ledger(max_ledger_age)
     entry = {"ts": time.time(), "before": before, "after": after, "label": label or ""}
     with LEDGER_PATH.open("a") as f:
         f.write(json.dumps(entry) + "\n")
@@ -82,7 +109,7 @@ def cmd_record(args, parser):
     before = _resolve_count(parser, "before", args.before, args.before_file)
     after = _resolve_count(parser, "after", args.after, args.after_file)
 
-    _append_ledger(before, after, args.label)
+    _append_ledger(before, after, args.label, max_ledger_age=args.max_ledger_age)
     saved = before - after
     pct = (saved / before * 100) if before else 0
     print(f"Recorded: {before} -> {after} tokens ({pct:.0f}% cut)")
@@ -264,6 +291,13 @@ def main():
     p_record.add_argument("--before-file", default=None, help="path or '-' for stdin; token count estimated as chars/4")
     p_record.add_argument("--after-file", default=None, help="path or '-' for stdin; token count estimated as chars/4")
     p_record.add_argument("--label", type=str, default=None)
+    p_record.add_argument(
+        "--max-ledger-age",
+        type=parse_age_or_zero,
+        default=DEFAULT_MAX_LEDGER_AGE,
+        metavar="DURATION",
+        help="evict ledger entries older than this before appending, e.g. 30m, 24h, 7d, 2w (default 90d; 0 disables)",
+    )
     p_record.set_defaults(func=cmd_record)
 
     p_gavel = sub.add_parser("gavel", help="dedup repeated tool output against the last-seen version")
@@ -273,7 +307,7 @@ def main():
     p_gavel.add_argument("--label", type=str, default=None)
     p_gavel.add_argument(
         "--max-cache-age",
-        type=parse_cache_age,
+        type=parse_age_or_zero,
         default=30 * DURATION_UNITS["d"],
         metavar="DURATION",
         help="evict cache entries older than this, e.g. 30m, 24h, 7d, 2w (default 30d; 0 disables)",
