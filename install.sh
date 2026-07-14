@@ -20,9 +20,14 @@ if ! command -v claude >/dev/null 2>&1; then
   exit 1
 fi
 
-# BASH_SOURCE is unset when bash is invoked from stdin (curl | bash); default
-# to empty so that path falls through to the GitHub-source install below.
-here="$(cd "$(dirname "${BASH_SOURCE[0]:-}")" 2>/dev/null && pwd)" || here=""
+# BASH_SOURCE is unset when bash is invoked from stdin (curl | bash). Guard
+# on that directly instead of feeding an empty string to dirname, which
+# returns "." (the caller's CWD) rather than "" and would wrongly treat any
+# directory the user happens to be in as the repo.
+here=""
+if [ -n "${BASH_SOURCE[0]:-}" ]; then
+  here="$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd)" || here=""
+fi
 if [ -n "$here" ] && [ -f "$here/.claude-plugin/marketplace.json" ]; then
   source="$here"
 else
