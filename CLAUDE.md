@@ -8,7 +8,7 @@ Ashlar is a context-compaction toolkit for AI agents: it trims bloated tool outp
 
 ## Commands
 
-No build step, no runtime dependencies beyond Python 3 stdlib. Dev-only deps (`ruff`, `pytest`) are pulled ad hoc by CI, not vendored — install locally with `pip install ruff pytest` (or a venv) to run the same checks:
+No build step, no runtime dependencies beyond Python 3 stdlib. Dev-only deps (`ruff`, `pytest`) are pinned in `requirements-dev.txt` and installed by CI from it — install locally with `pip install -r requirements-dev.txt` (or a venv) to run the same checks:
 
 ```
 python -m pytest -v          # tests/test_ashlar.py — subprocess-driven, isolated $HOME per test

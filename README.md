@@ -77,6 +77,23 @@ All four subcommands are real, working functionality: `record`/`report` to measu
 
 ## Installation
 
+**As a Claude Code plugin** (installs the [skill](skill/ashlar/SKILL.md) so an agent invokes `gavel`/`chisel` on its own):
+
+```
+curl -fsSL https://raw.githubusercontent.com/lucas-weiselowski/ashlar/main/install.sh | bash
+```
+
+or from a local clone:
+
+```
+git clone <this-repo> && cd ashlar
+./install.sh
+```
+
+This registers the repo as a marketplace (`claude plugin marketplace add`) and installs the `ashlar` plugin (`claude plugin install ashlar@ashlar`). Restart Claude Code to pick it up.
+
+**As a standalone CLI only** (no plugin/skill, just the `ashlar` command):
+
 ```
 git clone <this-repo>
 chmod +x ashlar/bin/ashlar

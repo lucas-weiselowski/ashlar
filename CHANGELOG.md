@@ -13,6 +13,15 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Version
 - Release automation (`.github/workflows/release.yml`): pushing a `vX.Y.Z` tag verifies `__version__`/CHANGELOG.md agree with the tag, re-runs the test suite, then publishes a GitHub Release with that version's changelog section as the body.
 - `.github/dependabot.yml` — monthly PRs to bump pinned Action SHAs.
 - `pyproject.toml` — ruff (lint + format) and pytest config.
+- `.claude-plugin/plugin.json` + `.claude-plugin/marketplace.json` — repo installable as a Claude Code plugin (own single-plugin marketplace).
+- `install.sh` — one-line installer (`curl | bash` or local clone); adds this repo as a marketplace and installs the `ashlar` plugin via `claude plugin`.
+- `requirements-dev.txt` — pins `ruff`/`pytest` versions used by CI and local dev, replacing unpinned `pip install`.
+
+### Changed
+- CI/release workflows now install dev deps from `requirements-dev.txt` (pinned, cached via `actions/setup-python`'s `cache: pip`) instead of `pip install ruff`/`pip install pytest` grabbing latest each run.
+- `smoke` job now depends on both `lint` and `test` passing (previously only `test`), so a formatting break no longer burns a smoke-test runner.
+- `release.yml`'s `verify` job now also runs `ruff check`/`ruff format --check`, so a lint regression can't slip into a tagged release even if it slipped past `main`.
+- `ci.yml` gained a `workflow_dispatch` trigger for manual re-runs.
 
 ## [0.1.0] - 2026-07-14
 ### Added

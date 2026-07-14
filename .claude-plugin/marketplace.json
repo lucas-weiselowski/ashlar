@@ -1,0 +1,17 @@
+{
+  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
+  "name": "ashlar",
+  "description": "Context-compaction toolkit for AI coding agents.",
+  "owner": {
+    "name": "Lucas Weiselowski",
+    "url": "https://github.com/lucas-weiselowski"
+  },
+  "plugins": [
+    {
+      "name": "ashlar",
+      "description": "Dedup repeated tool reads (gavel), trim verbose output (chisel), track token savings (record/report).",
+      "source": "./",
+      "category": "productivity"
+    }
+  ]
+}

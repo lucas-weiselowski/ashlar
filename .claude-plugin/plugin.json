@@ -1,0 +1,14 @@
+{
+  "name": "ashlar",
+  "version": "0.2.0",
+  "description": "Context-compaction toolkit for AI coding agents — dedup repeated tool reads (gavel), trim verbose output to load-bearing lines (chisel), track token savings over time (record/report).",
+  "author": {
+    "name": "Lucas Weiselowski",
+    "url": "https://github.com/lucas-weiselowski"
+  },
+  "homepage": "https://github.com/lucas-weiselowski/ashlar",
+  "repository": "https://github.com/lucas-weiselowski/ashlar",
+  "license": "MIT",
+  "keywords": ["context", "compaction", "tokens", "cli", "productivity"],
+  "skills": "./skill"
+}
