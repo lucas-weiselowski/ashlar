@@ -8,7 +8,7 @@ Ashlar is a context-compaction toolkit for AI agents: it trims bloated tool outp
 
 ## Commands
 
-No build step, no runtime dependencies beyond Python 3 stdlib. Dev-only deps (`ruff`, `pytest`) are pinned in `requirements-dev.txt` and installed by CI from it — install locally with `pip install -r requirements-dev.txt` (or a venv) to run the same checks:
+No build step, no runtime dependencies beyond Python 3 stdlib — running `bin/ashlar` never requires a build. Dev-only deps (`ruff`, `pytest`) are pinned in `requirements-dev.txt`; the standalone-binary build-only dep (`pyinstaller`) is pinned separately in `requirements-build.txt` since it's not needed to develop or run the CLI, only to package it. Both installed by CI from their respective files — install locally with `pip install -r requirements-dev.txt` (or a venv) to run the same checks:
 
 ```
 python -m pytest -v          # tests/test_ashlar.py — subprocess-driven, isolated $HOME per test
@@ -35,8 +35,8 @@ chmod +x bin/ashlar                                   # first run only
 - Ledger storage is `~/.ashlar/ledger.jsonl` (home directory, **not** in this repo) — one JSON object per line: `{ts, before, after, label}`. `report` sums the whole file; there's no rotation/pruning. `gavel`'s per-key cache lives alongside it at `~/.ashlar/gavel/<sha256(key)[:16]>.txt`.
 - `skill/ashlar/SKILL.md` — Claude Code skill documenting when/how to invoke `gavel`/`chisel`. `skill/ashlar/scripts/ashlar` is a relative symlink to `bin/ashlar` (single source of truth stays in `bin/`); if you move either file, fix the symlink.
 - `assets/*.svg` — hand-authored, no external image fetching or third-party assets. Keep any future images the same way (self-contained inline SVG, no CDN/network dependency).
-- `.github/workflows/ci.yml` — lint (ruff) + test (pytest, matrix Python 3.9–3.13) + CLI smoke job, on push/PR to `main`. Third-party Actions are pinned to commit SHA (comment carries the version tag); `.github/dependabot.yml` opens monthly PRs to bump them.
-- `.github/workflows/release.yml` — on `vX.Y.Z` tag push: verifies `__version__` and a matching `CHANGELOG.md` section, re-runs tests, then publishes a GitHub Release via `.github/scripts/extract_release_notes.py` (pulls that version's changelog section as the release body).
+- `.github/workflows/ci.yml` — lint (ruff) + test (pytest, matrix Python 3.9–3.13) + CLI smoke job + a single-platform PyInstaller build/smoke job (`binary-build-smoke`, fast feedback so a packaging break is caught on every PR, not just at release time), on push/PR to `main`. Third-party Actions are pinned to commit SHA (comment carries the version tag); `.github/dependabot.yml` opens monthly PRs to bump them (both `github-actions` and `pip` ecosystems).
+- `.github/workflows/release.yml` — on `vX.Y.Z` tag push: verifies `__version__`/`.claude-plugin/plugin.json` version and a matching `CHANGELOG.md` section, re-runs tests, builds standalone PyInstaller binaries for Linux/macOS(arm64+x86_64)/Windows (`build-binaries`, matrix job, each binary smoke-tested before upload), then publishes a GitHub Release with those binaries + a `SHA256SUMS` file attached, via `.github/scripts/extract_release_notes.py` (pulls that version's changelog section as the release body).
 
 ## Roadmap context
 

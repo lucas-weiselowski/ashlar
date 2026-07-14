@@ -65,6 +65,8 @@ export PATH="$PATH:/path/to/ashlar/bin"
 
 Requires Python 3, no other dependencies. Check it's on your PATH with `ashlar --version`.
 
+**As a standalone binary** (no Python required): every [release](../../releases) publishes prebuilt binaries for Linux, macOS (arm64 and x86_64), and Windows, plus a `SHA256SUMS` file to verify against. Download the one for your platform, `chmod +x` it (Linux/macOS), and put it on your `PATH`.
+
 ## Using the CLI
 
 `bin/ashlar` is a single-file Python (stdlib only) CLI with four subcommands: `record`, `report`, `gavel`, `chisel`. `gavel`/`chisel` read from a file or stdin and write the compacted result to stdout — they're filters, meant to sit in a pipeline before output reaches the model. `record`/`report` write to and read from a JSONL ledger at `~/.ashlar/ledger.jsonl` (one line per recorded compaction) so savings aren't lost between sessions; `gavel`/`chisel` can log to that same ledger with `--record`.
