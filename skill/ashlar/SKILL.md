@@ -55,6 +55,10 @@ some_command_that_dumps_a_huge_log 2>&1 | ashlar chisel --max-lines 80
 
 Tune `--context` up if a matched error needs more surrounding lines to be
 useful; tune `--max-lines` down for a harder cap on genuinely huge dumps.
+`--max-line-chars` (default 2000) catches a single oversized line — minified
+JSON, a base64 blob — that line-based collapsing/truncation can't touch on
+its own. `--normalize-repeats` collapses consecutive lines that differ only
+by timestamp/UUID/epoch, not just byte-identical ones.
 
 The keyword list is inherently incomplete — a load-bearing line phrased
 outside it can still get filtered out. Whenever chisel drops anything (by

@@ -4,6 +4,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Version
 
 ## [Unreleased]
 ### Added
+- `chisel --max-line-chars` (default 2000) — caps a single oversized line, head/tail elided. Line-based collapsing and `--max-lines` truncation both operate at line granularity, so a single huge line with no newlines (minified JSON, a base64 blob, one giant API response) previously sailed through completely uncompacted.
+- `chisel --normalize-repeats` — opt-in, collapses consecutive lines that differ only by a timestamp/UUID/epoch value, not just byte-identical ones. Off by default so existing exact-match behavior is unchanged.
 - `hooks/posttooluse_bash_chisel.py` — Claude Code `PostToolUse` hook (matcher `Bash`) that transparently chisels large Bash stdout before it reaches the model, no manual invocation required. Skips small output (<500 estimated tokens), never touches `stderr`/`interrupted`/`isImage`, always preserves the final 20 lines of stdout verbatim, fails safe to a pure passthrough on any malformed input or internal error, and auto-records before/after token counts to the ledger (`auto:posttooluse:bash`). Wired into `.claude-plugin/plugin.json`.
 
 ### Changed
@@ -16,6 +18,16 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Version
 - `hooks/posttooluse_bash_chisel.py`'s tail-guard compared against raw stdout lines, but chisel collapses repeated lines into `line  (×N)` first — so a repetitive tail (retry loops, progress output) always failed the guard's `endswith` check and got re-appended as raw duplicates on top of the collapsed summary. The guard now checks each tail line's presence individually, collapsed form included.
 - `hooks/posttooluse_bash_chisel.py` spawned two subprocesses per compacted call (`chisel`, then a separate `record`) — now a single `ashlar chisel --record` call does both.
 - `hooks/posttooluse_bash_chisel.py` had no upper bound on input size before hashing/writing/regex-scanning; stdout over ~2MB now passes through untouched instead of paying that cost on a hot path.
+- `LOAD_BEARING_RE` used `\b(error|exception|...)\b`, which never matches inside a glued identifier like `NullPointerException` or `TypeError` — no word boundary exists between lowercase and uppercase letters mid-word. Real exception class names in stack traces were silently filtered out. Widened to `\b\w*(?:error|exception|...)\w*\b`.
+- Same regex missed plural/gerund forms — `\bwarn(?:ing)?\b` didn't match "warnings", `\bfail(?:ed|ure)?\b` didn't match "failing"/"fails" (trailing word characters block the closing `\b`). Replaced the fixed suffix alternatives with open `\w*` wrapping, same approach `assert\w*` already used correctly.
+- `gavel`'s unified diff could be larger than the source itself on near-total rewrites (e.g. a timestamp changing on every line), silently costing more tokens than it saved on real-world-sized input. `gavel` now falls back to emitting the full new content when the diff isn't actually smaller — gated to inputs ≥500 estimated tokens so the documented tiny-input overhead case (see SKILL.md) is untouched.
+- `gavel`'s cache key and `chisel`'s recovery-copy filename both truncated their sha256 digest to 16 hex chars (64 bits) — a collision would silently diff against, or point recovery at, the wrong content with no error. Both now use the full 64-char digest.
+- A single line with no newlines (minified JSON, a base64 blob, a giant one-line API response) passed through `chisel` completely uncompacted — every reduction path (dedup, keyword filter, `--max-lines`) operates on lines, and there was only ever one. New `--max-line-chars` (default 2000) truncates any individual oversized line, head/tail, independent of line count.
+- `chisel`/`gavel` crashed with an uncaught `UnicodeDecodeError` on non-UTF-8 input (a truncated multibyte char, stray binary from a killed process) instead of degrading gracefully. Reads now use `errors="replace"`.
+- A single malformed line in `~/.ashlar/ledger.jsonl` (partial write from a killed process, hand-edited) crashed `report` entirely and permanently, with no way to see any totals until the file was manually fixed. Malformed lines are now skipped.
+- No concurrency guard existed on the ledger append or the gavel cache read-modify-write — relevant since this repo's own workflow runs multiple agents against the same `~/.ashlar/` directory in parallel. Both now take an advisory `flock` for the duration of the critical section.
+- `chisel --max-lines`/`--context` and `report --since` accepted nonsensical input (`--max-lines 0`, negative `--context`, an empty `--since`) that produced garbled output or a raw traceback instead of a clear error. Now validated at the argparse layer.
+- Colorized log output (ANSI escape codes) inflated token counts for no semantic value and defeated exact-match line dedup when two otherwise-identical lines differed only by color codes. `chisel`/`gavel` now strip ANSI escapes before processing (the reported "before" count still reflects the true raw input size, so the strip counts toward savings, not against them).
 
 ## [0.2.0] - 2026-07-14
 ### Added

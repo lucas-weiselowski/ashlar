@@ -2,7 +2,9 @@
 """Ashlar — context-compaction toolkit for AI agents: measure, dedup, and trim tool output."""
 
 import argparse
+import contextlib
 import difflib
+import fcntl
 import hashlib
 import json
 import re
@@ -27,11 +29,32 @@ DURATION_UNITS = {"m": 60, "h": 3600, "d": 86400, "w": 604800}
 # load-bearing filter itself, not just by --max-lines elision, which is why ANY
 # drop (filtered or elided) keeps a recovery path (see _save_full_text) instead
 # of removing content with no way back.
+#
+# \w* on both sides of each root (instead of a plain \b...\b) is deliberate:
+# a bare \b(error|exception)\b never matches inside NullPointerException or
+# TypeError (no word boundary before an uppercase letter glued to lowercase
+# text), and \bfail(?:ed|ure)?\b misses "failing"/"fails". Widening to \w*
+# trades a little precision (rare false positives like a surname containing
+# "warn") for not silently dropping real stack traces and build summaries —
+# the worse failure mode.
 LOAD_BEARING_RE = re.compile(
-    r"\b(error|exception|traceback|fail(?:ed|ure)?|fatal|panic|critical|alert|"
-    r"abort(?:ed)?|invalid|corrupt(?:ed)?|"
-    r"warn(?:ing)?|denied|refused|timeout|not found|assert\w*)\b",
+    r"\b\w*(?:error|exception|traceback|fail|fatal|panic|critical|alert|"
+    r"abort|invalid|corrupt|warn|denied|refused|timeout|assert)\w*\b"
+    r"|\bnot found\b",
     re.IGNORECASE,
+)
+
+# Matches ANSI SGR/cursor escape sequences (colorized CI/terminal output).
+# Pure noise for a text-reading model and defeats exact-match line dedup
+# when only the color codes differ between otherwise-identical lines.
+ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-9;]*[a-zA-Z]")
+
+# Volatile substrings (timestamps, epoch millis, UUIDs) that make otherwise-
+# identical log lines fail exact-match dedup. Used only by --normalize-repeats.
+VOLATILE_TOKEN_RE = re.compile(
+    r"\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:?\d{2})?"
+    r"|\b[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\b"
+    r"|\b\d{10,13}\b"
 )
 
 # Recovery copies are secret-adjacent (they hold full, unredacted command output)
@@ -39,16 +62,62 @@ LOAD_BEARING_RE = re.compile(
 # bound the directory instead of growing it forever.
 CHISEL_RECOVERY_MAX_FILES = 200
 
+# Below this, unified-diff header overhead legitimately exceeds tiny content;
+# see the guard in cmd_gavel.
+GAVEL_INFLATION_MIN_TOKENS = 500
+
 
 def parse_duration(s):
+    if not s:
+        raise argparse.ArgumentTypeError(f"invalid duration {s!r}, expected e.g. 30m, 24h, 7d, 2w")
     unit = s[-1]
     if unit not in DURATION_UNITS or not s[:-1].isdigit():
         raise argparse.ArgumentTypeError(f"invalid duration {s!r}, expected e.g. 30m, 24h, 7d, 2w")
     return int(s[:-1]) * DURATION_UNITS[unit]
 
 
+def positive_int(s):
+    v = int(s)
+    if v <= 0:
+        raise argparse.ArgumentTypeError(f"must be a positive integer, got {s!r}")
+    return v
+
+
+def non_negative_int(s):
+    v = int(s)
+    if v < 0:
+        raise argparse.ArgumentTypeError(f"must be a non-negative integer, got {s!r}")
+    return v
+
+
+def _read_stdin():
+    # Tool output isn't guaranteed valid UTF-8 (truncated multibyte char from a
+    # killed process, stray binary) — replace rather than crash the whole run.
+    sys.stdin.reconfigure(errors="replace")
+    return sys.stdin.read()
+
+
 def _read_text(path):
-    return sys.stdin.read() if path == "-" else Path(path).read_text()
+    return _read_stdin() if path == "-" else Path(path).read_text(errors="replace")
+
+
+@contextlib.contextmanager
+def _file_lock(path):
+    """Advisory exclusive lock for read-modify-write on ledger/gavel-cache files.
+
+    Nothing else in this tool serializes concurrent invocations, and this repo's
+    own workflow runs multiple agents against the same ~/.ashlar/ directory in
+    parallel — without this, two racing writers can interleave or clobber each
+    other's cache/ledger update.
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    lock_path = path.with_name(path.name + ".lock")
+    with lock_path.open("w") as f:
+        fcntl.flock(f, fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(f, fcntl.LOCK_UN)
 
 
 def _estimate_tokens(text):
@@ -62,7 +131,7 @@ def _read_source(path):
 def _append_ledger(before, after, label):
     LEDGER_DIR.mkdir(parents=True, exist_ok=True)
     entry = {"ts": time.time(), "before": before, "after": after, "label": label or ""}
-    with LEDGER_PATH.open("a") as f:
+    with _file_lock(LEDGER_PATH), LEDGER_PATH.open("a") as f:
         f.write(json.dumps(entry) + "\n")
     return entry
 
@@ -88,36 +157,49 @@ def cmd_record(args, parser):
 
 
 def _gavel_cache_path(key):
-    digest = hashlib.sha256(key.encode()).hexdigest()[:16]
+    # Full digest, not a truncated prefix — a collision here silently diffs
+    # against the wrong key's cached content with no error.
+    digest = hashlib.sha256(key.encode()).hexdigest()
     return GAVEL_DIR / f"{digest}.txt"
 
 
 def cmd_gavel(args, _parser):
     """Dedup repeated tool output: diff new content against the last-seen version for --key."""
-    text = _read_text(args.file) if args.file else sys.stdin.read()
-    before_tokens = _estimate_tokens(text)
+    raw_text = _read_text(args.file) if args.file else _read_stdin()
+    before_tokens = _estimate_tokens(raw_text)
+    text = ANSI_ESCAPE_RE.sub("", raw_text)
 
-    GAVEL_DIR.mkdir(parents=True, exist_ok=True)
     cache_path = _gavel_cache_path(args.key)
 
-    if not cache_path.exists():
-        note = "first read of this key, cached in full"
-        output = text
-    elif cache_path.read_text() == text:
-        note = "identical to cached version"
-        output = f"<unchanged since last read: {args.key}>\n"
-    else:
-        old = cache_path.read_text()
-        note = "diffed against cached version"
-        output = "".join(
-            difflib.unified_diff(
-                old.splitlines(keepends=True),
-                text.splitlines(keepends=True),
-                fromfile=f"{args.key} (cached)",
-                tofile=f"{args.key} (new)",
+    with _file_lock(cache_path):
+        if not cache_path.exists():
+            note = "first read of this key, cached in full"
+            output = text
+        elif cache_path.read_text(errors="replace") == text:
+            note = "identical to cached version"
+            output = f"<unchanged since last read: {args.key}>\n"
+        else:
+            old = cache_path.read_text(errors="replace")
+            diff_text = "".join(
+                difflib.unified_diff(
+                    old.splitlines(keepends=True),
+                    text.splitlines(keepends=True),
+                    fromfile=f"{args.key} (cached)",
+                    tofile=f"{args.key} (new)",
+                )
             )
-        )
-    cache_path.write_text(text)
+            # Below GAVEL_INFLATION_MIN_TOKENS, unified-diff header overhead
+            # legitimately exceeds tiny content — that's documented, expected
+            # behavior (see SKILL.md), not something to paper over. Above it,
+            # a diff that isn't even smaller than the source (e.g. a near-total
+            # rewrite — a timestamp changing on every line) defeats the point.
+            if before_tokens >= GAVEL_INFLATION_MIN_TOKENS and _estimate_tokens(diff_text) >= before_tokens:
+                note = "diff not smaller than source, emitting full content"
+                output = text
+            else:
+                note = "diffed against cached version"
+                output = diff_text
+        cache_path.write_text(text)
 
     sys.stdout.write(output)
     after_tokens = _estimate_tokens(output)
@@ -129,17 +211,42 @@ def cmd_gavel(args, _parser):
         _append_ledger(before_tokens, after_tokens, args.label or f"gavel:{args.key}")
 
 
-def _collapse_repeats(lines):
+def _normalize_volatile(line):
+    return VOLATILE_TOKEN_RE.sub("<t>", line)
+
+
+def _collapse_repeats(lines, normalize=False):
+    key = _normalize_volatile if normalize else (lambda line: line)
     collapsed = []
     i, n = 0, len(lines)
     while i < n:
         j = i + 1
-        while j < n and lines[j] == lines[i]:
+        while j < n and key(lines[j]) == key(lines[i]):
             j += 1
         count = j - i
         collapsed.append(lines[i] if count == 1 else f"{lines[i]}  (×{count})")
         i = j
     return collapsed
+
+
+def _truncate_long_lines(lines, max_chars):
+    """A single oversized line (minified JSON, a base64 blob, one huge API
+    response with no newlines) sails straight through line-based collapsing
+    and --max-lines truncation untouched — neither operates below the line
+    granularity. Cap each line individually, head/tail, same convention as
+    the whole-document elision below."""
+    truncated = False
+    out = []
+    for line in lines:
+        if len(line) <= max_chars:
+            out.append(line)
+            continue
+        head = max_chars // 2
+        tail = max_chars - head
+        elided = len(line) - head - tail
+        out.append(f"{line[:head]} ...{elided} chars elided... {line[-tail:]}")
+        truncated = True
+    return out, truncated
 
 
 def _select_load_bearing(lines, context):
@@ -162,25 +269,29 @@ def _save_full_text(text):
     Written 0600 (command output routinely contains secrets) and the directory
     is pruned to the most recent CHISEL_RECOVERY_MAX_FILES so it can't grow
     unbounded now that the PostToolUse hook writes here unattended."""
-    CHISEL_DIR.mkdir(parents=True, exist_ok=True)
-    digest = hashlib.sha256(text.encode()).hexdigest()[:16]
+    # Full digest, not a truncated prefix — a collision would point the
+    # recovery marker at someone else's dropped content with no error.
+    digest = hashlib.sha256(text.encode()).hexdigest()
     path = CHISEL_DIR / f"{digest}.txt"
-    path.write_text(text)
-    path.chmod(0o600)
-    _prune_recovery_dir()
+    with _file_lock(CHISEL_DIR / "_prune"):
+        path.write_text(text)
+        path.chmod(0o600)
+        _prune_recovery_dir()
     return path
 
 
 def cmd_chisel(args, _parser):
     """Reduce verbose text (logs, stack traces, search dumps) to its load-bearing lines."""
-    text = _read_text(args.file) if args.file else sys.stdin.read()
-    before_tokens = _estimate_tokens(text)
+    raw_text = _read_text(args.file) if args.file else _read_stdin()
+    before_tokens = _estimate_tokens(raw_text)
+    text = ANSI_ESCAPE_RE.sub("", raw_text)
     raw_lines = text.splitlines()
 
-    lines = _collapse_repeats(raw_lines)
+    raw_lines, lines_truncated = _truncate_long_lines(raw_lines, args.max_line_chars)
+    lines = _collapse_repeats(raw_lines, normalize=args.normalize_repeats)
     keep = _select_load_bearing(lines, args.context)
     selected = [lines[i] for i in sorted(keep)] if keep else lines
-    dropped = bool(keep) and len(selected) < len(lines)
+    dropped = lines_truncated or (bool(keep) and len(selected) < len(lines))
 
     if len(selected) > args.max_lines:
         head = args.max_lines // 2
@@ -192,7 +303,7 @@ def cmd_chisel(args, _parser):
     output = "\n".join(selected) + ("\n" if selected else "")
 
     if dropped:
-        full_path = _save_full_text(text)
+        full_path = _save_full_text(raw_text)
         output += f"⟨ashlar: {len(raw_lines)}→{len(selected)} lines kept, full original at {full_path}⟩\n"
 
     sys.stdout.write(output)
@@ -219,7 +330,14 @@ def _load_entries(since_seconds):
             line = line.strip()
             if not line:
                 continue
-            entry = json.loads(line)
+            try:
+                entry = json.loads(line)
+            except json.JSONDecodeError:
+                # A line torn by a concurrent writer or a killed process
+                # shouldn't take down every future `report` — skip it, not crash.
+                continue
+            if not all(k in entry for k in ("ts", "before", "after")):
+                continue
             if cutoff is not None and entry["ts"] < cutoff:
                 continue
             entries.append(entry)
@@ -249,7 +367,7 @@ def cmd_report(args, _parser):
 
     by_label = {}
     for e in entries:
-        by_label.setdefault(e["label"] or "(no label)", []).append(e)
+        by_label.setdefault(e.get("label") or "(no label)", []).append(e)
 
     header = f"{'Label':<32}{'Count':>7}{'Rough':>12}{'Perfect':>12}{'Saved':>12}{'%':>6}"
     print(header)
@@ -283,8 +401,24 @@ def main():
 
     p_chisel = sub.add_parser("chisel", help="reduce verbose text to its load-bearing lines")
     p_chisel.add_argument("--file", default=None, help="path to read from; defaults to stdin")
-    p_chisel.add_argument("--max-lines", type=int, default=200, help="output cap; head/tail kept, middle elided")
-    p_chisel.add_argument("--context", type=int, default=2, help="lines of context kept around each match")
+    p_chisel.add_argument(
+        "--max-lines", type=positive_int, default=200, help="output cap; head/tail kept, middle elided"
+    )
+    p_chisel.add_argument(
+        "--context", type=non_negative_int, default=2, help="lines of context kept around each match"
+    )
+    p_chisel.add_argument(
+        "--max-line-chars",
+        type=positive_int,
+        default=2000,
+        help="cap a single line's length (head/tail kept, middle elided) — catches oversized lines "
+        "line-based collapsing/truncation can't touch, e.g. minified JSON or a base64 blob",
+    )
+    p_chisel.add_argument(
+        "--normalize-repeats",
+        action="store_true",
+        help="collapse consecutive lines that differ only by timestamp/UUID/epoch, not just byte-identical ones",
+    )
     p_chisel.add_argument("--record", action="store_true", help="log before/after token counts to the ledger")
     p_chisel.add_argument("--label", type=str, default=None)
     p_chisel.set_defaults(func=cmd_chisel)

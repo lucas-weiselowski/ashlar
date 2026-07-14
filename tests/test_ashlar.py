@@ -243,3 +243,148 @@ def test_chisel_record_flag_writes_ledger(home, tmp_path):
     ledger = home / ".ashlar" / "ledger.jsonl"
     entry = json.loads(ledger.read_text().splitlines()[0])
     assert entry["label"] == "ci-log"
+
+
+def test_chisel_keeps_camelcase_exception_lines(home, tmp_path):
+    # Regression: a bare \b(exception|error)\b never matches inside a glued
+    # identifier like NullPointerException — no word boundary exists between
+    # lowercase and uppercase letters. That silently dropped real stack traces.
+    lines = [f"debug line {i}" for i in range(20)]
+    lines[10] = "Caused by: java.lang.NullPointerException"
+    src = tmp_path / "log.txt"
+    src.write_text("\n".join(lines))
+
+    result = run(["chisel", "--file", str(src), "--context", "1"], home)
+    assert "NullPointerException" in result.stdout
+
+
+def test_chisel_keeps_plural_and_gerund_forms(home, tmp_path):
+    # Regression: \bwarn(?:ing)?\b misses "warnings" (trailing 's' blocks the
+    # boundary), \bfail(?:ed|ure)?\b misses "failing"/"fails".
+    lines = [f"debug line {i}" for i in range(20)]
+    lines[5] = "3 warnings generated"
+    lines[15] = "test suite is failing"
+    src = tmp_path / "log.txt"
+    src.write_text("\n".join(lines))
+
+    result = run(["chisel", "--file", str(src), "--context", "0"], home)
+    assert "3 warnings generated" in result.stdout
+    assert "test suite is failing" in result.stdout
+
+
+def test_chisel_strips_ansi_escape_codes(home, tmp_path):
+    src = tmp_path / "log.txt"
+    src.write_text("\x1b[31mERROR: boom\x1b[0m\n")
+
+    result = run(["chisel", "--file", str(src)], home)
+    assert result.stdout == "ERROR: boom\n"
+    assert "\x1b[" not in result.stdout
+
+
+def test_chisel_truncates_oversized_single_line(home, tmp_path):
+    # Regression: a single huge line (minified JSON, base64 blob) has no
+    # newlines, so line-based collapsing/--max-lines truncation never engage —
+    # it sailed through completely uncompacted.
+    src = tmp_path / "blob.json"
+    src.write_text("x" * 5000)
+
+    result = run(["chisel", "--file", str(src), "--max-line-chars", "100"], home)
+    assert "chars elided" in result.stdout
+    assert len(result.stdout) < 1000
+    assert "full original at" in result.stdout
+
+
+def test_chisel_normalize_repeats_collapses_timestamped_duplicates(home, tmp_path):
+    lines = [f"2024-01-01T00:00:{i:02d}Z heartbeat OK" for i in range(10)]
+    src = tmp_path / "log.txt"
+    src.write_text("\n".join(lines))
+
+    result = run(["chisel", "--file", str(src), "--normalize-repeats"], home)
+    assert "(×10)" in result.stdout
+
+    # Without the flag, none of these are byte-identical, so nothing collapses.
+    result_default = run(["chisel", "--file", str(src)], home)
+    assert "(×10)" not in result_default.stdout
+
+
+def test_chisel_rejects_invalid_max_lines(home, tmp_path):
+    src = tmp_path / "log.txt"
+    src.write_text("line\n")
+
+    result = run(["chisel", "--file", str(src), "--max-lines", "0"], home)
+    assert result.returncode != 0
+
+
+def test_chisel_rejects_negative_context(home, tmp_path):
+    src = tmp_path / "log.txt"
+    src.write_text("line\n")
+
+    result = run(["chisel", "--file", str(src), "--context", "-1"], home)
+    assert result.returncode != 0
+
+
+def test_chisel_handles_invalid_utf8_without_crashing(home, tmp_path):
+    src = tmp_path / "binary.log"
+    src.write_bytes(b"before\xff\xfeafter ERROR: boom\n")
+
+    result = run(["chisel", "--file", str(src)], home)
+    assert result.returncode == 0
+    assert "ERROR: boom" in result.stdout
+
+
+def test_gavel_diff_fallback_when_diff_not_smaller(home, tmp_path):
+    # Regression: near-total rewrites (e.g. a timestamp on every line) can
+    # make the unified diff bigger than the source — defeats the point.
+    src = tmp_path / "log.txt"
+    old_lines = [f"2024-01-01T00:00:{i:02d}Z line {i}" for i in range(200)]
+    src.write_text("\n".join(old_lines))
+    run(["gavel", "--key", "log.txt", "--file", str(src)], home)
+
+    new_lines = [f"2024-01-01T00:01:{i:02d}Z line {i}" for i in range(200)]
+    src.write_text("\n".join(new_lines))
+    result = run(["gavel", "--key", "log.txt", "--file", str(src)], home)
+
+    assert "diff not smaller than source" in result.stderr
+    assert result.stdout == "\n".join(new_lines)
+
+
+def test_gavel_small_diff_still_shown_despite_overhead(home, tmp_path):
+    # The fallback above must not swallow the documented "tiny input" case —
+    # SKILL.md explicitly says small diffs can cost more than the source and
+    # that's expected, reported honestly, not papered over.
+    src = tmp_path / "file.py"
+    src.write_text("line1\nline2\n")
+    run(["gavel", "--key", "file.py", "--file", str(src)], home)
+
+    src.write_text("line1\nline2-changed\n")
+    result = run(["gavel", "--key", "file.py", "--file", str(src)], home)
+    assert "-line2" in result.stdout
+    assert "+line2-changed" in result.stdout
+
+
+def test_gavel_cache_key_uses_full_digest(home, tmp_path):
+    src = tmp_path / "file.py"
+    src.write_text("line1\n")
+    run(["gavel", "--key", "file.py", "--file", str(src)], home)
+
+    cache_files = list((home / ".ashlar" / "gavel").glob("*.txt"))
+    assert len(cache_files) == 1
+    assert len(cache_files[0].stem) == 64  # full sha256 hex digest, not truncated
+
+
+def test_report_skips_corrupted_ledger_line(home, tmp_path):
+    run(["record", "--before", "1000", "--after", "500", "--label", "good"], home)
+
+    ledger = home / ".ashlar" / "ledger.jsonl"
+    with ledger.open("a") as f:
+        f.write("{not valid json\n")
+        f.write(json.dumps({"ts": 123}) + "\n")  # missing before/after
+
+    result = run(["report"], home)
+    assert result.returncode == 0
+    assert "1,000 tokens" in result.stdout
+
+
+def test_report_since_rejects_empty_duration(home):
+    result = run(["report", "--since", ""], home)
+    assert result.returncode != 0
